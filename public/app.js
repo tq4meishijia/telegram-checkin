@@ -164,7 +164,7 @@ function renderLogin(el) {
         </div>
         <div class="field__error" id="login-err"></div>
         <button class="btn btn--primary btn--block" id="login-btn">登录</button>
-        <p class="field__hint">初始密码为 <code class="mono">admin</code>，登录后请立即在「设置」页修改。</p>
+        <p class="field__hint">未配置 <code class="mono">ADMIN_PASSWORD</code> 时初始口令为 <code class="mono">admin</code>；忘记密码可用 <code class="mono">wrangler secret put ADMIN_PASSWORD</code> 重置。</p>
       </div>
     </div>
   `;
@@ -773,7 +773,21 @@ function passwordScore(pw) {
   return Math.min(s, 4);
 }
 
-function renderSettings(el, seq) {
+async function renderSettings(el, seq) {
+  el.innerHTML = `<div class="bento"><div class="card col-4"><p class="muted">加载中...</p></div></div>`;
+
+  // 鉴权探针：未登录时 api() 会抛 unauthorized 并自动跳登录页。
+  // 必须先探针再渲染——否则匿名访问 #/settings 会直接看到密码修改表单
+  // （曾经的回归：重写时漏了这段，其他 4 个页面都有）。
+  try {
+    await api("/api/accounts");
+  } catch (e) {
+    if (e.message === "unauthorized") return; // api() 已负责跳转，这里不再渲染
+    el.innerHTML = `<div class="bento"><div class="card col-4"><p class="empty">加载失败: ${esc(e.message)}</p></div></div>`;
+    return;
+  }
+  if (seq !== currentRenderSeq) return;
+
   el.innerHTML = `
     <div class="bento">
       <div class="card col-2 row-2">

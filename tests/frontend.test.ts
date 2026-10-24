@@ -144,6 +144,31 @@ describe("功能完整性契约", () => {
     expect(raw).toEqual([]);
   });
 
+  it("除登录页外，每个渲染函数都先做鉴权探针再渲染", () => {
+    // 曾经的教训：renderSettings 漏了首行 api() 调用，导致未登录直接访问
+    // #/settings 也能看到完整的密码修改表单（其他 4 个页面都有探针）。
+    // 注意："加载中..."占位可以出现在探针之前，但实质内容不行。
+    const fns = ["renderDashboard", "renderTasks", "renderAccounts", "renderLogs", "renderSettings"];
+    for (const fn of fns) {
+      const m = appJs.match(new RegExp(`(?:async )?function ${fn}\\s*\\([^)]*\\)\\s*\\{([\\s\\S]*?)\\n\\}`));
+      expect(m, `${fn} 未找到函数定义`).not.toBeNull();
+      // 剥掉"加载中"占位渲染，只看实质内容的渲染时机
+      const body = m![1].replace(/el\.innerHTML\s*=\s*`[^`]*加载中[^`]*`/g, "");
+      const firstApi = body.search(/api\(["'`]\/api\//);
+      const firstRender = body.indexOf("el.innerHTML");
+      expect(firstApi, `${fn} 缺少 api() 鉴权探针`).toBeGreaterThan(-1);
+      expect(firstRender, `${fn} 没有实质内容渲染`).toBeGreaterThan(-1);
+      expect(firstApi, `${fn} 的鉴权探针晚于首次实质渲染`).toBeLessThan(firstRender);
+    }
+  });
+
+  it("登录页不冒充初始口令（避免与 secret 优先级冲突时误导用户）", () => {
+    // 曾经的教训：登录页写死"初始密码为 admin"，但生产设了 ADMIN_PASSWORD
+    // secret 时 admin 并不生效，用户被误导。提示必须说明前提条件。
+    expect(appJs).not.toMatch(/初始密码为/);
+    expect(appJs).toMatch(/未配置 <code class="mono">ADMIN_PASSWORD<\/code> 时初始口令为/);
+  });
+
   it("api() 只对鉴权类 401 跳登录页，业务 401 留在原页面", () => {
     // 曾经的教训：原实现把任何 401 都当掉登录，导致 /api/password 的
     // invalid_old_password（原密码错误）把用户直接踢到登录页。
