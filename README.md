@@ -133,7 +133,7 @@ npm run db:export   # 导出到 backups/telegram-checkin-db.sql（gitignored，�
 
 | 日期 | 变更 | 提交 |
 |---|---|---|
-| 2026-10-24 | **多账户 + 密码修改 + 前端重构**：新增 `accounts` 表与 `/api/accounts`（增删改查/验证/切换/默认，重复登录 409 拦截，级联删除）；runner 按任务所属账户取 session，会话失效自动标记账户 invalid；新增 `/api/password`（PBKDF2 哈希 + 强度校验 + 二次确认，改后全局吊销会话）；`public/` 按 Bento Grid 风格重写（响应式三档断点 + 暗色模式 + reduced-motion）；顺带修复 P0-1 未鉴权 logout、P1-1 时区下拉静默改写、P1-2 `Origin: null` 500、P2-2 DELETE 404、P2-3 upcoming 含过期、P2-4 历史脏排期阻塞启停、P2-8 补 `nosniff`；单测 72 → **139** | 见 `git log` |
+| 2026-10-24 | **多账户 + 密码修改 + 前端重构（已上线）**：新增 `accounts` 表与 `/api/accounts`（增删改查/验证/切换/默认，重复登录 409 拦截，级联删除）；runner 按任务所属账户取 session，会话失效自动标记账户 invalid；新增 `/api/password`（PBKDF2 哈希 + 强度校验 + 二次确认，改后全局吊销会话）；`public/` 按 Bento Grid 风格重写（响应式三档断点 + 暗色模式 + reduced-motion）；顺带修复 P0-1 未鉴权 logout、P1-1 时区下拉静默改写、P1-2 `Origin: null` 500、P2-2 DELETE 404、P2-3 upcoming 含过期、P2-4 历史脏排期阻塞启停、P2-8 补 `nosniff`，以及浏览器实测发现的 esc 漏定义与 api() 401 误跳转；单测 72 → **141**；线上版本 `fa921228`，cron cpuTime 实测 1ms | 见 `git log` |
 | 2026-10-24 | 全量代码通读与实测验证，产出 `docs/project-overview-2026-10-24.md` | 见 `git log` |
 | 2026-10-24 | **上线成功**：清场重建（删旧 Worker/空库 → 新建 telegram-checkin-db → 迁移 → secrets → deploy），线上 https://telegram-checkin.tq4meishijia.workers.dev 全链路验证通过（登录/Cookie/D1 读写/限流 429/CSP）；Telegram 凭据统一为 tdesktop 公开值 | `874e766` 等 |
 | 2026-10-24 | QA 遗留闭环：JS/CSS 静态资源也带 CSP 头（run_worker_first 扩展）、capture_reply 测试改 fake timers 消除偶发 flaky（8/8 轮稳定）、删除 `.gitignore` 中误入的 `.ddev/` 行 | 见 `git log` |

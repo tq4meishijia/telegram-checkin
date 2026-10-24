@@ -11,9 +11,10 @@
 
 - **进度**：M0–M6 全部完成并上线；2026-10-24 先后完成「安全/稳定性加固」「全量代码通读」「多账户 + 密码修改 + 前端重构」三轮迭代（变更清单见 §17 / §19），M7 剩余项未开始。
 - **线上地址**：https://telegram-checkin.tq4meishijia.workers.dev （2026-10-24 重命名后的新地址；旧地址 tg-checkin.… 随 Worker 名变更已失效）
-- **⚠️ 部署状态**：**本地代码已领先于线上**。§18.6 上线时的线上版本是「加固后、多账户前」的代码；本次多账户迭代（0003 迁移 + 新代码）**尚未部署**。部署前必须先 `npm run db:migrate:remote` 再 `npm run deploy`（见 §10 与红线 #8）。
-  - **0003 迁移对存量库的影响**：自动把 `settings.tg_session` 迁成 1 号「默认账户」（`is_default=1`、`status='ok'`），存量任务 `account_id` 回填为 1，并删除 settings 旧键。升级后原有任务继续归属该账户，行为不变。
-  - **初始口令**：未配置 `ADMIN_PASSWORD` secret 时，登录口令为内置默认值 `admin`；配置了 secret 则以 secret 为准。改过密码后以 `settings.admin_pw_hash` 为唯一准绳。
+- **⚠️ 部署状态**：✅ **已上线（2026-10-24 15:55）**——版本 `fa921228-2099-4589-b44b-d3c6e7530a0e`，先 apply 0003 迁移再 deploy（严守红线 #8）。详见 §19.8。
+  - **0003 迁移对存量库的影响**：自动把 `settings.tg_session` 迁成 1 号「默认账户」（`is_default=1`、`status='ok'`），存量任务 `account_id` 回填为 1，并删除 settings 旧键。**实测本次线上库迁移前 settings/tasks 均为空**，故只建出 1 号空 session 占位账户（`status='unknown'`）。
+  - **登录口令**：线上 `ADMIN_PASSWORD` secret 已设置（`wrangler secret list` 确认三个 secret 齐全），因此登录口令是**该 secret 的强随机值**，不是 `admin`；`admin` 仅在该 secret 未设置时生效。改过密码后以 `settings.admin_pw_hash` 为唯一准绳。
+  - **线上待办**：Telegram session 未配置（1 号账户 `session` 为空、`status='unknown'`）——需跑 `scripts/login.mjs` 拿 StringSession，在「账户」页添加。
 - **线上现有数据**：1 个任务「每日签到」（目标 `me`、指令 `/checkin`、daily 08:00 Asia/Shanghai）；有成功/失败日志若干。
 - **代码健康度**：`npx tsc --noEmit` 无错误；vitest **139/139** 通过（8 个测试文件）；包体 gzip 约 333 KiB（远低于 3MB 上限）。
 - **QA 验证（2026-10-24）**：加固轮全量测试 **IS_PASS: YES**（单测 72/72、冒烟 7/7、对抗探测 8/8），报告 `docs/qa-report-2026-10-24.md`；多账户轮验证见 §19.4。
@@ -658,3 +659,38 @@ npx wrangler deploy
 **顺带修正的文案**：设置页原写「Session 字符串以哈希以外的方式安全保存在 D1」含混且不准（session 实为明文存 D1，属已知风险），改为「Session 字符串只保存在 D1，任何接口都不会返回它」。
 
 **测试数**：139 → **141**（新增 B1/B2 两条防回归契约测试）。
+
+### 19.8 上线记录（2026-10-24 15:55，用户下令「上线」）
+
+**顺序**（严守红线 #8：先迁移再 deploy）：预检 → 提交 → 远程迁移 → 部署 → 线上验证。
+
+**预检**：
+- `npx wrangler whoami`：`d1 (write)` 等写权限齐全
+- `npx wrangler d1 migrations list --remote`：仅 `0003_accounts.sql` 待应用（0001/0002 已在）
+- `npx wrangler secret list`：`ADMIN_PASSWORD` / `TG_API_HASH` / `TG_API_ID` **三个齐全**
+- 远程库实际数据：`settings` 与 `tasks` **均为空**（§18.6 所述的 1 个任务已不在），故本次迁移无数据回填风险
+- `npm run verify`：tsc 0 错误 + vitest **141/141**
+
+**提交**：`feat: 多账户管理 + WebUI 密码修改 + 前端 Bento Grid 重构`（19 改 + 8 新增 + 1 删除）
+
+**迁移**：`npx wrangler d1 migrations apply telegram-checkin-db --remote` → `0003_accounts.sql` ✅（10 条命令）
+**部署**：`npm run deploy` → 版本 `fa921228-2099-4589-b44b-d3c6e7530a0e`，3 个静态资源上传，gzip 339.46 KiB，Startup 78ms，cron `* * * * *` 已注册
+
+**线上验证（全过）**：
+| 项 | 结果 |
+|---|---|
+| `/api/health` | 200 `{"ok":true}` |
+| 未带 Cookie 访问 tasks/accounts/logs/overview/session | 全 401 |
+| **未鉴权 `POST /api/logout`** | **401**（P0-1 修复在线上生效） |
+| 错误密码登录 | 401 `invalid_password` |
+| 登录限流 | 同 IP 5 次失败后第 6 次 429（生产 D1 写入正常） |
+| 安全响应头 | `/` 带 CSP + `X-Content-Type-Options: nosniff` |
+| 前端代码版本 | 线上 `app.js` 含 `function esc` / `AUTH_401` / `renderAccounts` / `showAccountModal`；`style.css` 含 13 处 Bento 令牌 |
+| **cron 真实触发** | `wrangler tail` 抓到 `event.cron = "* * * * *"`，`outcome: ok`，**cpuTime 1ms**（远低于免费版 10ms），`exceptions: []`，scriptVersion 正是本次部署的 `fa921228` |
+
+**已知说明**：`Origin: null` 打 `/api/login` 返回 401 而非 403 是**预期**——login 注册在鉴权中间件之前，本就不做 Origin 校验；该校验对需鉴权的路由生效（本地已用 Cookie 实测 403）。
+
+**遗留（用户侧）**：
+1. Telegram session 未配置——需跑 `scripts/login.mjs` 拿 StringSession，在「账户」页添加（添加前任务执行会失败并把账户标记为 invalid）
+2. 登录口令是 `ADMIN_PASSWORD` secret 的强随机值，不是 `admin`
+3. 建议上线后连续观察 Cloudflare 面板的 `exceededCpu` 指标（本次 tail 实测 cron cpuTime 1ms，余量充足）
