@@ -11,6 +11,7 @@ export interface FakeDbInit {
   settings?: Record<string, string>;
   login_attempts?: Record<string, { fail_count: number; window_start: number }>;
   accounts?: Row[];
+  login_flows?: Row[];
 }
 
 export interface FakeDb {
@@ -21,6 +22,7 @@ export interface FakeDb {
     settings: Map<string, string>;
     attempts: Map<string, { fail_count: number; window_start: number }>;
     accounts: Row[];
+    flows: Row[];
   };
   /** 让包含指定子串的语句抛错，用于模拟 D1 瞬时故障 */
   failOn(substr: string): void;
@@ -98,8 +100,14 @@ export function createFakeDb(init: FakeDbInit = {}): FakeDb {
     settings: new Map(Object.entries(init.settings ?? {})),
     attempts: new Map(Object.entries(init.login_attempts ?? {})),
     accounts: (init.accounts ?? []).map((a) => accountDefaults(a)),
+    flows: (init.login_flows ?? []).map((f) => ({ ...f })),
   };
+  // AUTOINCREMENT 语义：从现有最大 id 继续，避免新行 id 与预置数据撞车
   let autoId = 0;
+  for (const r of [...state.tasks, ...state.accounts, ...state.logs, ...state.flows]) {
+    const n = Number(r.id);
+    if (Number.isFinite(n) && n > autoId) autoId = n;
+  }
   const failures: string[] = [];
 
   function failOn(substr: string) { failures.push(substr); }
@@ -117,6 +125,15 @@ export function createFakeDb(init: FakeDbInit = {}): FakeDb {
     if (sql.includes("SELECT value FROM settings WHERE key = ?")) {
       const v = state.settings.get(params[0]);
       return v === undefined ? [] : [{ value: v }];
+    }
+
+    // ---------- login_flows（网页交互式登录的中间态） ----------
+    if (sql.includes("FROM login_flows")) {
+      if (sql.includes("WHERE id = ?")) {
+        const f = state.flows.find((x) => x.id === params[0]);
+        return f ? [{ ...f }] : [];
+      }
+      throw new Error(`fake_db: unsupported login_flows SELECT: ${sql}`);
     }
 
     // ---------- accounts ----------
@@ -250,6 +267,7 @@ export function createFakeDb(init: FakeDbInit = {}): FakeDb {
         return 1;
       }
       if (table === "accounts") { state.accounts.push(row); autoId = Math.max(autoId, row.id); return 1; }
+      if (table === "login_flows") { state.flows.push(row); return 1; }
       if (table === "run_logs") { state.logs.push(row); return 1; }
       if (table === "tasks") { state.tasks.push(row); autoId = Math.max(autoId, row.id); return 1; }
       if (table === "login_attempts") {
@@ -289,11 +307,11 @@ export function createFakeDb(init: FakeDbInit = {}): FakeDb {
     }
 
     // ---------- 通用：UPDATE <table> SET <col=expr, ...> WHERE id = ? ----------
-    const um = sql.match(/^UPDATE (tasks|accounts) SET (.+?) WHERE id\s*=\s*\?$/);
+    const um = sql.match(/^UPDATE (tasks|accounts|login_flows) SET (.+?) WHERE id\s*=\s*\?$/);
     if (um) {
       const table = um[1];
       const id = params[params.length - 1];
-      const rows = table === "tasks" ? state.tasks : state.accounts;
+      const rows = table === "tasks" ? state.tasks : table === "accounts" ? state.accounts : state.flows;
       const t = rows.find((x) => x.id === id);
       if (!t) return 0;
       const pi = { i: 0 };
@@ -321,6 +339,16 @@ export function createFakeDb(init: FakeDbInit = {}): FakeDb {
       const before = state.tasks.length;
       state.tasks = state.tasks.filter((t) => t.account_id !== params[0]);
       return before - state.tasks.length;
+    }
+    if (sql === "DELETE FROM login_flows WHERE id = ?") {
+      const i = state.flows.findIndex((f) => f.id === params[0]);
+      if (i >= 0) state.flows.splice(i, 1);
+      return i >= 0 ? 1 : 0;
+    }
+    if (sql.startsWith("DELETE FROM login_flows WHERE expires_at < ?")) {
+      const before = state.flows.length;
+      state.flows = state.flows.filter((f) => String(f.expires_at) >= String(params[0]));
+      return before - state.flows.length;
     }
     if (sql === "DELETE FROM accounts WHERE id = ?") {
       const i = state.accounts.findIndex((a) => a.id === params[0]);

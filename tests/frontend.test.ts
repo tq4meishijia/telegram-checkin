@@ -130,6 +130,36 @@ describe("功能完整性契约", () => {
     expect(appJs).toContain("/api/overview");
   });
 
+  it("网页交互式登录向导：四个端点 + 四类输入 + 错误提示位齐全", () => {
+    // 手机号 → 验证码 →（2FA）→ 保存，四步各自的端点
+    expect(appJs).toContain("/api/accounts/login/start");
+    expect(appJs).toContain("/api/accounts/login/code");
+    expect(appJs).toContain("/api/accounts/login/password");
+    expect(appJs).toContain("/api/accounts/login/finish");
+    // 四类输入框
+    expect(appJs).toContain('id="am-phone"');
+    expect(appJs).toContain('id="am-code"');
+    expect(appJs).toContain('id="am-2fa"');
+    expect(appJs).toContain('id="am-api-id"');
+    expect(appJs).toContain('id="am-api-hash"');
+    // 每个步骤都有独立的错误提示位与步骤指示
+    expect((appJs.match(/class="field__error" id="am-err"/g) || []).length).toBeGreaterThanOrEqual(4);
+    expect(appJs).toContain("function stepsHtml");
+    // 两步验证密码必须用 password 类型输入
+    expect(appJs).toMatch(/id="am-2fa" type="password"/);
+  });
+
+  it("登录错误码都有中文提示（不透传原始 RPC 错误名给用户）", () => {
+    expect(appJs).toContain("function loginErr");
+    for (const code of [
+      "invalid_phone", "invalid_code", "code_expired", "password_required",
+      "invalid_2fa_password", "flood_wait", "flow_expired", "too_many_attempts",
+      "duplicate_account", "network_error", "api_id_restricted", "session_invalid",
+    ]) {
+      expect(appJs, `缺少错误码文案: ${code}`).toContain(code + ":");
+    }
+  });
+
   it("时区下拉覆盖任务已有值时不会静默改写（P1-1 修复）", () => {
     expect(appJs).toContain("function tzOptions(selected)");
     expect(appJs).toContain("SCHEDULE_TZS.includes(selected) ? SCHEDULE_TZS : [selected, ...SCHEDULE_TZS]");
@@ -182,7 +212,7 @@ describe("功能完整性契约", () => {
     // 而单测全绿——因为没有任何测试真正加载过 app.js。
     const helpers = [
       "esc", "toast", "parseDate", "fmtTime", "relTime", "scheduleDesc", "statusBadge",
-      "tzOptions", "taskCard", "accountCard", "logRow", "passwordScore", "api",
+      "tzOptions", "taskCard", "accountCard", "logRow", "passwordScore", "api", "loginErr",
       "navigate", "updateNav",
       "renderLogin", "renderDashboard", "renderTasks", "renderLogs", "renderAccounts", "renderSettings",
       "showTaskModal", "showAccountModal",

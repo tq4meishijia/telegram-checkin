@@ -5,6 +5,8 @@ import { checkLoginAllowed, clearLoginFailures, recordLoginFailure } from "./rat
 import { safeJson } from "./util";
 import { verifyAdminPassword } from "./password";
 import { accountRoutes } from "./api/accounts";
+import { createLoginRoutes } from "./api/login";
+import { createGramDriver } from "./tg/login-flow";
 import { passwordRoutes } from "./api/password";
 import { taskRoutes } from "./api/tasks";
 import { logRoutes } from "./api/logs";
@@ -65,6 +67,9 @@ app.post("/api/logout", async (c) => {
 });
 
 // API 路由
+// 网页交互式登录（手机号 → 验证码 → 两步密码）挂在 accounts 之前，
+// 路径是 /api/accounts/login/*，与 accounts 的 /:id 不会冲突。
+app.route("/api/accounts/login", createLoginRoutes(createGramDriver));
 app.route("/api/accounts", accountRoutes);
 app.route("/api/password", passwordRoutes);
 app.route("/api/tasks", taskRoutes);

@@ -68,9 +68,34 @@ npm run verify
 - 修改密码会同时 bump `auth_epoch`，**吊销所有已签发的 Cookie**，需重新登录。
 - 登录受同 IP 60 秒 5 次失败限流保护。
 
-## 拿 Telegram Session（M1 闸门）
+## 登录 Telegram 账号
 
-1. Telegram 凭据项目统一使用 **Telegram Desktop 内置的公开 api_id/api_hash**（`api_id=17349`，来自 tdesktop 官方源码，无需申请）——本地 `.dev.vars` 已预填，直接用。
+有两条路：**网页内直接登录**（推荐，不用装环境）和**本地脚本导出 Session**（备用）。
+
+### 方式 A：网页内交互式登录（推荐）
+
+管理界面 → **账户页** →「+ 添加账户」→「手机号登录」，按向导走：
+
+```
+手机号（含国际区号） → 验证码 →（若开了两步验证）密码 → 命名并保存
+```
+
+- 验证码发到该号码的 Telegram App；App 未登录时走短信。向导会明确告诉你是哪一种。
+- 全程在服务端完成，`StringSession` 只落在 D1 的 `accounts` 表，任何接口都不会返回它。
+- 中间态（未授权 session + `phoneCodeHash`）存在 `login_flows` 表，**10 分钟过期**，登录成功或取消即删。
+- 同一验证码流程最多试 5 次，超过作废；同一 Telegram 账号重复添加返回 409。
+
+> **⚠️ 必须先用自己的 api_id**：Telegram 禁止用公开 api_id 发送验证码。
+> 项目默认的 `17349`（tdesktop 公开值）调用 `sendCode` 会返回 `API_ID_PUBLISHED_FLOOD`，
+> 向导会提示「服务端配置的 api_id 是公开值」并自动展开「高级」区。
+> 解决：到 [my.telegram.org](https://my.telegram.org) → API development tools 免费申请一组
+> `api_id` / `api_hash`，填进「高级」里（只影响本次登录，会随账户一起保存），
+> 或用 `npx wrangler secret put TG_API_ID` / `TG_API_HASH` 换掉服务端默认值。
+> 注意：已登录的账号发消息（cron 签到）**不受此限制**，只有新登录需要。
+
+### 方式 B：本地脚本导出 Session
+
+1. 准备 `.dev.vars`（`.dev.vars.example` 已预填公开凭据；若要真正登录成功，同样需要换成自己的 `api_id`/`api_hash`）。
 2. 登录分两种模式，**默认是交互式**（在终端里按提示输入）：
 
    **交互模式（默认）** —— 依次提示输入手机号、验证码、二步密码：
@@ -96,7 +121,7 @@ npm run verify
    > 只有缺哪个才问哪个。二步密码在终端里是明文回显的，注意旁人或录屏。
 
 3. 终端输出 `SESSION=1...` 长串。
-4. 打开管理界面，登录 → **账户页**「+ 添加账户」→ 粘贴 session。
+4. 管理界面 → **账户页** →「+ 添加账户」→「粘贴 Session」→ 粘贴保存。
    保存前 Worker 会先连接 Telegram 验证有效性，失败不会写入；同一 Telegram 账号重复添加会返回 409。
 
 ## 部署上线
@@ -104,7 +129,7 @@ npm run verify
 ```bash
 npx wrangler login
 # 首次：npx wrangler d1 create telegram-checkin-db，把 database_id 填回 wrangler.toml
-npx wrangler d1 migrations apply telegram-checkin-db --remote   # 必须先迁移（含 0003），再 deploy
+npx wrangler d1 migrations apply telegram-checkin-db --remote   # 必须先迁移（含 0004），再 deploy
 npx wrangler secret put TG_API_ID
 npx wrangler secret put TG_API_HASH
 npx wrangler secret put ADMIN_PASSWORD     # 可选；不设则初始密码为 admin
@@ -147,6 +172,7 @@ npm run db:export   # 导出到 backups/telegram-checkin-db.sql（gitignored，�
 
 | 日期 | 变更 | 提交 |
 |---|---|---|
+| 2026-10-24 | **网页交互式登录**：账户页「+ 添加账户」新增手机号向导（手机号 → 验证码 → 两步密码 → 命名保存），全程在服务端完成，不依赖本地脚本；新增 `login_flows` 表（迁移 0004，10 分钟过期、用完即删）与 `/api/accounts/login/{start,code,password,finish}` 四个端点 + 状态查询/取消；支持自定义 `api_id`/`api_hash`（公开值 `17349` 会被 Telegram 拒绝 `sendCode`）；Telegram 错误统一映射为中文提示；新增 20 例测试（147 → **167**） | 见 `git log` |
 | 2026-10-24 | **多账户 + 密码修改 + 前端重构（已上线）**：新增 `accounts` 表与 `/api/accounts`（增删改查/验证/切换/默认，重复登录 409 拦截，级联删除）；runner 按任务所属账户取 session，会话失效自动标记账户 invalid；新增 `/api/password`（PBKDF2 哈希 + 强度校验 + 二次确认，改后全局吊销会话）；`public/` 按 Bento Grid 风格重写（响应式三档断点 + 暗色模式 + reduced-motion）；顺带修复 P0-1 未鉴权 logout、P1-1 时区下拉静默改写、P1-2 `Origin: null` 500、P2-2 DELETE 404、P2-3 upcoming 含过期、P2-4 历史脏排期阻塞启停、P2-8 补 `nosniff`，以及浏览器实测发现的 esc 漏定义与 api() 401 误跳转；单测 72 → **141**；线上版本 `fa921228`，cron cpuTime 实测 1ms | 见 `git log` |
 | 2026-10-24 | 全量代码通读与实测验证，产出 `docs/project-overview-2026-10-24.md` | 见 `git log` |
 | 2026-10-24 | **上线成功**：清场重建（删旧 Worker/空库 → 新建 telegram-checkin-db → 迁移 → secrets → deploy），线上 https://telegram-checkin.tq4meishijia.workers.dev 全链路验证通过（登录/Cookie/D1 读写/限流 429/CSP）；Telegram 凭据统一为 tdesktop 公开值 | `874e766` 等 |

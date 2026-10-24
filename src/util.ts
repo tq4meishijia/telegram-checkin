@@ -23,6 +23,18 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label = "timeout
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * 生成与 SQLite `datetime('now')` **完全同格式**的时间串：UTC、空格分隔、无 Z。
+ *
+ * 为什么不用 toISOString()：`next_run_at` 等列是 ISO（T/Z），而 `created_at` /
+ * `expires_at` 是 SQLite 空格格式。混用会导致字符串比较永远不成立
+ * （见交接文档 §8「时间格式双轨」）。凡是与 datetime('now') 同列比较的值，
+ * 一律用本函数生成。
+ */
+export function sqliteNow(offsetMs = 0): string {
+  return new Date(Date.now() + offsetMs).toISOString().slice(0, 19).replace("T", " ");
+}
+
 export function toHex(bytes: Uint8Array): string {
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }

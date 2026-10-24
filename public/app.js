@@ -550,14 +550,14 @@ async function renderAccounts(el, seq) {
         </div>
         <div class="card col-1">
           <div class="card__title">登录方式</div>
-          <div class="card__body">本地脚本 <span class="mono">scripts/login.mjs</span> 取得 StringSession 后粘贴到此处。</div>
+          <div class="card__body">网页内输入手机号 + 验证码直接登录；也可粘贴 <span class="mono">scripts/login.mjs</span> 导出的 StringSession。</div>
         </div>
 
         ${accounts.map((a) => accountCard(a)).join("")}
         <div class="card card--dashed col-2" data-action="add-account">
           <div>
             <div class="card__title">+ 添加账户</div>
-            <div class="card__sub">粘贴新的 StringSession</div>
+            <div class="card__sub">手机号登录 / 粘贴 Session</div>
           </div>
         </div>
       </div>
@@ -592,47 +592,379 @@ function accountCard(a) {
     </div>`;
 }
 
+// ===== 添加账户向导（手机号交互式登录 / 粘贴 Session） =====
+
+/** Telegram 登录错误码 → 中文提示。未列出的原样展示，便于排查。 */
+const LOGIN_ERR = {
+  invalid_phone: "手机号格式不正确，需含国际区号（如 +8613xxxxxxxxx）",
+  invalid_code: "验证码错误，请重新输入",
+  invalid_code_format: "请输入 3-10 位数字验证码",
+  code_expired: "验证码已过期，请重新发送",
+  phone_banned: "该手机号已被 Telegram 封禁",
+  phone_not_registered: "该手机号尚未注册 Telegram",
+  phone_flood: "该号码请求过于频繁，请稍后再试",
+  password_required: "该账户需要两步验证密码",
+  invalid_2fa_password: "两步验证密码错误",
+  invalid_2fa_password_format: "请输入两步验证密码",
+  flood_wait: "操作过于频繁，请稍后再试",
+  flow_not_found: "登录会话已失效，请重新开始",
+  flow_expired: "登录超时（10 分钟），请重新开始",
+  too_many_attempts: "尝试次数过多，请重新开始",
+  duplicate_account: "该 Telegram 账号已经添加过了",
+  network_error: "无法连接 Telegram，请检查网络或代理",
+  tg_credentials_missing: "服务端未配置 TG_API_ID / TG_API_HASH",
+  invalid_api_credentials: "api_id / api_hash 不合法，请检查是否填错",
+  api_id_restricted:
+    "服务端配置的 api_id 是公开值，Telegram 禁止用它发送验证码。请到 my.telegram.org → API development tools 申请自己的 api_id/api_hash，填在下方「高级」里再试。",
+  user_deactivated: "该 Telegram 账号已注销",
+  session_invalid: "登录会话失效，请重新开始",
+  login_incomplete: "登录未完成，请重新开始",
+  invalid_stage: "操作顺序不对，请重新开始",
+  timeout: "操作超时，请重试",
+};
+
+function loginErr(code) {
+  return LOGIN_ERR[code] || "操作失败：" + code;
+}
+
 function showAccountModal() {
   const overlay = document.createElement("div");
   overlay.className = "overlay";
   overlay.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true">
-      <div class="modal__title">添加 Telegram 账户</div>
-      <div class="field">
-        <label class="field__label" for="af-name">账户名称</label>
-        <input class="input" id="af-name" placeholder="例如：小号A" />
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="am-title">
+      <div class="modal__title" id="am-title">添加 Telegram 账户</div>
+      <div class="tabs" role="tablist">
+        <button class="tab is-active" data-tab="phone" role="tab" aria-selected="true">手机号登录</button>
+        <button class="tab" data-tab="session" role="tab" aria-selected="false">粘贴 Session</button>
       </div>
-      <div class="field">
-        <label class="field__label" for="af-session">StringSession</label>
-        <textarea class="textarea" id="af-session" placeholder="粘贴 scripts/login.mjs 输出的 SESSION= 后面的长串"></textarea>
-        <span class="field__hint">保存前会先连接 Telegram 验证有效性，失败不会写入。</span>
-      </div>
-      <div class="field__error" id="af-err"></div>
-      <div class="modal__actions">
-        <button class="btn" id="af-cancel">取消</button>
-        <button class="btn btn--primary" id="af-save">验证并保存</button>
-      </div>
+      <div id="am-body"></div>
     </div>
   `;
   document.body.appendChild(overlay);
-  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
 
-  const err = overlay.querySelector("#af-err");
-  overlay.querySelector("#af-cancel").onclick = () => overlay.remove();
-  overlay.querySelector("#af-save").onclick = async () => {
-    err.textContent = "";
-    const body = {
-      name: overlay.querySelector("#af-name").value.trim(),
-      session: overlay.querySelector("#af-session").value.trim(),
+  const body = overlay.querySelector("#am-body");
+  /** 向导状态：flowId 非空表示服务端有未完成的登录流程，取消时要清掉 */
+  const st = { flowId: null, phone: "", apiId: "", apiHash: "" };
+
+  function dropFlow() {
+    if (!st.flowId) return;
+    // 尽力而为：清掉服务端的未授权 session，失败不影响前端
+    api("/api/accounts/login/" + st.flowId, { method: "DELETE" }).catch(() => {});
+    st.flowId = null;
+  }
+
+  function closeOverlay() {
+    dropFlow();
+    overlay.remove();
+  }
+  overlay.onclick = (e) => { if (e.target === overlay) closeOverlay(); };
+
+  function stepsHtml(active) {
+    const order = ["phone", "code", "ready"];
+    const labels = { phone: "手机号", code: "验证码", ready: "保存" };
+    const ai = order.indexOf(active);
+    return `<div class="steps">${order.map((k, i) => {
+      const cls = i === ai ? "is-active" : i < ai ? "is-done" : "";
+      return `<span class="step ${cls}"><span class="step__dot">${i + 1}</span>${labels[k]}</span>`;
+    }).join('<span class="step__sep">→</span>')}</div>`;
+  }
+
+  // --- 步骤 1：手机号 ---
+  function stepPhone() {
+    body.innerHTML = `
+      ${stepsHtml("phone")}
+      <div class="field">
+        <label class="field__label" for="am-phone">手机号（含国际区号）</label>
+        <input class="input" id="am-phone" type="tel" inputmode="tel" autocomplete="tel"
+               placeholder="+8613xxxxxxxxx" value="${esc(st.phone)}" />
+        <span class="field__hint">验证码会发到这个号码的 Telegram App；App 未登录时走短信。</span>
+      </div>
+      <details class="adv"${st.apiId ? " open" : ""}>
+        <summary>高级：使用自己的 api_id / api_hash</summary>
+        <div class="grid-2">
+          <div class="field">
+            <label class="field__label" for="am-api-id">api_id</label>
+            <input class="input" id="am-api-id" inputmode="numeric" placeholder="12345678" value="${esc(st.apiId)}" />
+          </div>
+          <div class="field">
+            <label class="field__label" for="am-api-hash">api_hash</label>
+            <input class="input" id="am-api-hash" placeholder="32 位十六进制" value="${esc(st.apiHash)}" />
+          </div>
+        </div>
+        <span class="field__hint">在 my.telegram.org → API development tools 免费申请。留空则用服务端配置的默认凭据。</span>
+      </details>
+      <div class="field__error" id="am-err"></div>
+      <div class="modal__actions">
+        <button class="btn" id="am-cancel">取消</button>
+        <button class="btn btn--primary" id="am-send">发送验证码</button>
+      </div>
+    `;
+    const phoneEl = body.querySelector("#am-phone");
+    const idEl = body.querySelector("#am-api-id");
+    const hashEl = body.querySelector("#am-api-hash");
+    const errEl = body.querySelector("#am-err");
+    const btn = body.querySelector("#am-send");
+    body.querySelector("#am-cancel").onclick = closeOverlay;
+
+    const send = async () => {
+      errEl.textContent = "";
+      const cleaned = phoneEl.value.trim().replace(/[\s\-().]/g, "");
+      if (!/^\+?[1-9]\d{5,19}$/.test(cleaned)) {
+        errEl.textContent = "请输入含国际区号的手机号，例如 +8613xxxxxxxxx";
+        phoneEl.focus();
+        return;
+      }
+      // 自定义凭据：要么都填，要么都不填（只填一个必然是配置错误）
+      const apiId = idEl.value.trim();
+      const apiHash = hashEl.value.trim();
+      if (!apiId !== !apiHash) {
+        errEl.textContent = "api_id 与 api_hash 需要同时填写";
+        (apiId ? hashEl : idEl).focus();
+        return;
+      }
+      st.apiId = apiId;
+      st.apiHash = apiHash;
+      st.phone = cleaned.startsWith("+") ? cleaned : "+" + cleaned;
+
+      const payload = { phone: st.phone };
+      if (apiId) {
+        payload.api_id = apiId;
+        payload.api_hash = apiHash;
+      }
+
+      btn.classList.add("is-loading");
+      btn.textContent = "发送中...";
+      try {
+        const res = await api("/api/accounts/login/start", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        st.flowId = res.flow_id;
+        stepCode(Boolean(res.is_code_via_app));
+      } catch (e) {
+        errEl.textContent = loginErr(e.message);
+        // 凭据被拒时自动展开高级区，省得用户再点一次
+        if (e.message === "api_id_restricted" || e.message === "invalid_api_credentials") {
+          const adv = body.querySelector(".adv");
+          if (adv) adv.open = true;
+        }
+        btn.classList.remove("is-loading");
+        btn.textContent = "发送验证码";
+      }
     };
-    try {
-      await api("/api/accounts", { method: "POST", body: JSON.stringify(body) });
-      toast("账户已添加", "ok");
-      overlay.remove();
-      navigate();
-    } catch (e) { err.textContent = e.message; }
-  };
-  overlay.querySelector("#af-name").focus();
+    btn.onclick = send;
+    phoneEl.onkeydown = (e) => { if (e.key === "Enter") send(); };
+    phoneEl.focus();
+  }
+
+  // --- 步骤 2：验证码 ---
+  function stepCode(viaApp) {
+    body.innerHTML = `
+      ${stepsHtml("code")}
+      <div class="notice notice--ok">验证码已发送${viaApp ? "到 Telegram App" : "（短信）"}：<span class="mono">${esc(st.phone)}</span></div>
+      <div class="field">
+        <label class="field__label" for="am-code">验证码</label>
+        <input class="input" id="am-code" inputmode="numeric" autocomplete="one-time-code"
+               maxlength="10" placeholder="5 位数字" />
+        <span class="field__hint">Telegram 有时会把验证码直接显示在 App 的聊天里。</span>
+      </div>
+      <div class="field__error" id="am-err"></div>
+      <div class="modal__actions">
+        <button class="btn" id="am-back">返回</button>
+        <button class="btn btn--primary" id="am-verify">验证</button>
+      </div>
+    `;
+    const codeEl = body.querySelector("#am-code");
+    const errEl = body.querySelector("#am-err");
+    const btn = body.querySelector("#am-verify");
+    body.querySelector("#am-back").onclick = () => { dropFlow(); stepPhone(); };
+
+    const verify = async () => {
+      errEl.textContent = "";
+      const code = codeEl.value.replace(/\s/g, "");
+      if (!/^\d{3,10}$/.test(code)) {
+        errEl.textContent = "请输入 3-10 位数字验证码";
+        codeEl.focus();
+        return;
+      }
+      btn.classList.add("is-loading");
+      btn.textContent = "验证中...";
+      try {
+        const res = await api("/api/accounts/login/code", {
+          method: "POST",
+          body: JSON.stringify({ flow_id: st.flowId, code }),
+        });
+        if (res.need_password) stepPassword();
+        else stepReady(res.user);
+      } catch (e) {
+        errEl.textContent = loginErr(e.message);
+        btn.classList.remove("is-loading");
+        btn.textContent = "验证";
+        codeEl.select();
+      }
+    };
+    btn.onclick = verify;
+    codeEl.onkeydown = (e) => { if (e.key === "Enter") verify(); };
+    codeEl.focus();
+  }
+
+  // --- 步骤 2b：两步验证密码（仅在账号开启 2FA 时出现） ---
+  function stepPassword() {
+    body.innerHTML = `
+      ${stepsHtml("code")}
+      <div class="notice">该账户开启了两步验证，请输入密码继续。</div>
+      <div class="field">
+        <label class="field__label" for="am-2fa">两步验证密码</label>
+        <input class="input" id="am-2fa" type="password" autocomplete="current-password"
+               placeholder="输入两步验证密码" />
+      </div>
+      <div class="field__error" id="am-err"></div>
+      <div class="modal__actions">
+        <button class="btn" id="am-cancel">取消</button>
+        <button class="btn btn--primary" id="am-pw">登录</button>
+      </div>
+    `;
+    const pwEl = body.querySelector("#am-2fa");
+    const errEl = body.querySelector("#am-err");
+    const btn = body.querySelector("#am-pw");
+    body.querySelector("#am-cancel").onclick = closeOverlay;
+
+    const submit = async () => {
+      errEl.textContent = "";
+      if (!pwEl.value) {
+        errEl.textContent = "请输入两步验证密码";
+        pwEl.focus();
+        return;
+      }
+      btn.classList.add("is-loading");
+      btn.textContent = "登录中...";
+      try {
+        const res = await api("/api/accounts/login/password", {
+          method: "POST",
+          body: JSON.stringify({ flow_id: st.flowId, password: pwEl.value }),
+        });
+        stepReady(res.user);
+      } catch (e) {
+        errEl.textContent = loginErr(e.message);
+        btn.classList.remove("is-loading");
+        btn.textContent = "登录";
+        pwEl.select();
+      }
+    };
+    btn.onclick = submit;
+    pwEl.onkeydown = (e) => { if (e.key === "Enter") submit(); };
+    pwEl.focus();
+  }
+
+  // --- 步骤 3：命名并保存 ---
+  function stepReady(user) {
+    const uname = user && user.username ? "@" + user.username : "";
+    const who = uname || (user && user.first_name ? user.first_name : st.phone);
+    const suggested = who;
+    body.innerHTML = `
+      ${stepsHtml("ready")}
+      <div class="notice notice--ok">登录成功：${esc(who)}${user && user.id ? "（ID " + esc(String(user.id)) + "）" : ""}</div>
+      <div class="field">
+        <label class="field__label" for="am-name">账户名称</label>
+        <input class="input" id="am-name" maxlength="40" value="${esc(suggested)}" />
+        <span class="field__hint">只用于在本站区分账户，之后可随时修改。</span>
+      </div>
+      <div class="field__error" id="am-err"></div>
+      <div class="modal__actions">
+        <button class="btn" id="am-cancel">取消</button>
+        <button class="btn btn--primary" id="am-save">保存账户</button>
+      </div>
+    `;
+    const nameEl = body.querySelector("#am-name");
+    const errEl = body.querySelector("#am-err");
+    const btn = body.querySelector("#am-save");
+    body.querySelector("#am-cancel").onclick = closeOverlay;
+
+    const save = async () => {
+      errEl.textContent = "";
+      btn.classList.add("is-loading");
+      btn.textContent = "保存中...";
+      try {
+        await api("/api/accounts/login/finish", {
+          method: "POST",
+          body: JSON.stringify({ flow_id: st.flowId, name: nameEl.value.trim() }),
+        });
+        st.flowId = null;
+        overlay.remove();
+        toast("账户已添加", "ok");
+        navigate();
+      } catch (e) {
+        errEl.textContent = loginErr(e.message);
+        btn.classList.remove("is-loading");
+        btn.textContent = "保存账户";
+      }
+    };
+    btn.onclick = save;
+    nameEl.onkeydown = (e) => { if (e.key === "Enter") save(); };
+    nameEl.focus();
+  }
+
+  // --- 备用：直接粘贴 StringSession（本地脚本导出） ---
+  function stepSession() {
+    body.innerHTML = `
+      <div class="field">
+        <label class="field__label" for="am-name2">账户名称</label>
+        <input class="input" id="am-name2" placeholder="例如：小号A" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="am-session">StringSession</label>
+        <textarea class="textarea" id="am-session" placeholder="粘贴 scripts/login.mjs 输出的 SESSION= 后面的长串"></textarea>
+        <span class="field__hint">保存前会先连接 Telegram 验证有效性，失败不会写入。</span>
+      </div>
+      <div class="field__error" id="am-err"></div>
+      <div class="modal__actions">
+        <button class="btn" id="am-cancel">取消</button>
+        <button class="btn btn--primary" id="am-save2">验证并保存</button>
+      </div>
+    `;
+    const errEl = body.querySelector("#am-err");
+    const btn = body.querySelector("#am-save2");
+    body.querySelector("#am-cancel").onclick = closeOverlay;
+    btn.onclick = async () => {
+      errEl.textContent = "";
+      btn.classList.add("is-loading");
+      btn.textContent = "验证中...";
+      try {
+        await api("/api/accounts", {
+          method: "POST",
+          body: JSON.stringify({
+            name: body.querySelector("#am-name2").value.trim(),
+            session: body.querySelector("#am-session").value.trim(),
+          }),
+        });
+        overlay.remove();
+        toast("账户已添加", "ok");
+        navigate();
+      } catch (e) {
+        errEl.textContent = loginErr(e.message);
+        btn.classList.remove("is-loading");
+        btn.textContent = "验证并保存";
+      }
+    };
+    body.querySelector("#am-name2").focus();
+  }
+
+  // --- Tab 切换 ---
+  overlay.querySelectorAll(".tab").forEach((tab) => {
+    tab.onclick = () => {
+      overlay.querySelectorAll(".tab").forEach((t) => {
+        t.classList.remove("is-active");
+        t.setAttribute("aria-selected", "false");
+      });
+      tab.classList.add("is-active");
+      tab.setAttribute("aria-selected", "true");
+      dropFlow();
+      if (tab.dataset.tab === "session") stepSession();
+      else stepPhone();
+    };
+  });
+
+  stepPhone();
 }
 
 async function verifyAccount(id, btn) {

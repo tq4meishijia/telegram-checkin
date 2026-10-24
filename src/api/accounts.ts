@@ -4,10 +4,7 @@ import type { Env } from "../bindings";
 import { safeJson, withTimeout } from "../util";
 import { withAccountSession } from "../tg/client";
 import { validateAccountBody } from "../validation";
-
-/** 账户字段投影：**绝不包含 session 字符串**，任何响应都走这个投影 */
-const ACCOUNT_COLS =
-  "id, name, api_id, api_hash, tg_user_id, tg_username, status, last_error, last_verified_at, enabled, is_default, created_at, updated_at";
+import { ACCOUNT_COLS, grantDefault, shouldBecomeDefault } from "../account-shared";
 
 /** session 验证连接 Telegram 的超时（防止连接挂起拖住请求 / 频繁刷新触发限流） */
 const VERIFY_TIMEOUT_MS = 20000;
@@ -29,18 +26,8 @@ async function probeAccount(env: Env, row: { session: string; api_id?: string | 
 }
 
 /**
- * 新账户是否应接管默认位：
- * - 一个账户都没有；
- * - 或当前默认账户从未配置过 session（迁移产生的占位账户）。
- * 这样首次添加真实账户时它会自动成为默认，不需要用户手动切换。
+ * 新账户是否应接管默认位：见 account-shared.ts（与网页登录落库共用同一判据）。
  */
-async function shouldBecomeDefault(env: Env): Promise<boolean> {
-  const current = await env.DB.prepare(
-    "SELECT session FROM accounts WHERE is_default = 1"
-  ).first<{ session: string }>();
-  if (!current) return true;
-  return !current.session;
-}
 
 // GET /api/accounts — 列表（不含 session 字符串）
 accountRoutes.get("/", async (c) => {
@@ -243,10 +230,7 @@ accountRoutes.post("/:id/switch", async (c) => {
   if (!row) return c.json({ error: "not_found" }, 404);
   if (Number(row.enabled) !== 1) return c.json({ error: "account_disabled" }, 400);
 
-  await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE accounts SET is_default = 0, updated_at = datetime('now')"),
-    c.env.DB.prepare("UPDATE accounts SET is_default = 1, updated_at = datetime('now') WHERE id = ?").bind(id),
-  ]);
+  await grantDefault(c.env, id);
 
   const account = await c.env.DB.prepare(`SELECT ${ACCOUNT_COLS} FROM accounts WHERE id = ?`).bind(id).first();
   return c.json({ ok: true, account });

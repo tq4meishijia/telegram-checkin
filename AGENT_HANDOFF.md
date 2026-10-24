@@ -11,12 +11,13 @@
 
 - **进度**：M0–M6 全部完成并上线；2026-10-24 先后完成「安全/稳定性加固」「全量代码通读」「多账户 + 密码修改 + 前端重构」三轮迭代（变更清单见 §17 / §19），M7 剩余项未开始。
 - **线上地址**：https://telegram-checkin.tq4meishijia.workers.dev （2026-10-24 重命名后的新地址；旧地址 tg-checkin.… 随 Worker 名变更已失效）
-- **⚠️ 部署状态**：✅ **已上线（2026-10-24 15:55）**——版本 `fa921228-2099-4589-b44b-d3c6e7530a0e`，先 apply 0003 迁移再 deploy（严守红线 #8）。详见 §19.8。
+- **⚠️ 部署状态**：线上版本 `fa921228`（2026-10-24 15:55，含多账户/密码/前端重构）。**本次「网页交互式登录」改动尚未部署**——需先 apply `0004_login_flows.sql`（纯新增表，不动存量数据）再 deploy。详见 §19.11。
   - **0003 迁移对存量库的影响**：自动把 `settings.tg_session` 迁成 1 号「默认账户」（`is_default=1`、`status='ok'`），存量任务 `account_id` 回填为 1，并删除 settings 旧键。**实测本次线上库迁移前 settings/tasks 均为空**，故只建出 1 号空 session 占位账户（`status='unknown'`）。
   - **登录口令**：线上 `ADMIN_PASSWORD` secret 已设置（`wrangler secret list` 确认三个 secret 齐全），因此登录口令是**该 secret 的强随机值**，不是 `admin`；`admin` 仅在该 secret 未设置时生效。改过密码后以 `settings.admin_pw_hash` 为唯一准绳。
-  - **线上待办**：Telegram session 未配置（1 号账户 `session` 为空、`status='unknown'`）——需跑 `scripts/login.mjs` 拿 StringSession，在「账户」页添加。
+  - **线上待办**：Telegram session 未配置（1 号账户 `session` 为空、`status='unknown'`）——可用网页「账户页 → 添加账户 → 手机号登录」（§19.11），或跑 `scripts/login.mjs` 后粘贴 StringSession。
+  - **⚠️ 公开 api_id 的硬限制**：`TG_API_ID=17349`（tdesktop 公开值）调用 `auth.sendCode` 会被 Telegram 拒绝（`API_ID_PUBLISHED_FLOOD` / `FLOOD`），**新登录必须用自己申请的 api_id/api_hash**；已登录账号发消息（cron 签到）不受影响。详见 §19.11。
 - **线上现有数据**：1 个任务「每日签到」（目标 `me`、指令 `/checkin`、daily 08:00 Asia/Shanghai）；有成功/失败日志若干。
-- **代码健康度**：`npx tsc --noEmit` 无错误；vitest **139/139** 通过（8 个测试文件）；包体 gzip 约 333 KiB（远低于 3MB 上限）。
+- **代码健康度**：`npx tsc --noEmit` 无错误；vitest **167/167** 通过（10 个测试文件）；包体 gzip 约 340 KiB（远低于 3MB 上限）。
 - **QA 验证（2026-10-24）**：加固轮全量测试 **IS_PASS: YES**（单测 72/72、冒烟 7/7、对抗探测 8/8），报告 `docs/qa-report-2026-10-24.md`；多账户轮验证见 §19.4。
 - **代码仓库**：https://github.com/tq4meishijia/telegram-checkin （**公开**仓库，MIT LICENSE；2026-10-24 由 `cf-tg-checkin` 重命名而来，旧地址自动重定向）。
 - **CI**：`.github/workflows/ci.yml`，push/PR 自动跑 `npm ci` + typecheck + test。
@@ -763,3 +764,143 @@ npx wrangler deploy
 **未覆盖**：完整登录（真实验证码 → 二步密码 → 拿到 SESSION）需要真实手机号与短信，无法自动化；上述已证明到"提示渲染 + 等待输入"这一步。
 
 **测试数**：143 → **147**。
+
+---
+
+## 19.11 网页交互式登录 Telegram 账号（2026-10-24 17:0x）
+
+> 需求澄清：用户先说「在网页上实现交互式登录功能」，我误做成 WebUI 管理端加用户名+密码，
+> 用户纠正「我的意思是 telegram 账号的交互式登录」——**已把 WebUI 那套改动整体回滚**
+> （`git checkout` 7 个文件，工作区恢复到 147/147 基线），改为实现本节的真正需求。
+> 教训：**在这个项目里「登录」默认指 Telegram 账号登录，不是管理端登录**（管理端只有口令）。
+
+### 19.11.1 为什么要一张新表（核心约束）
+
+Telegram 的 `auth.sendCode` 会返回一个与**当前 authKey 绑定**的 `phoneCodeHash`，
+后续 `auth.SignIn` 必须用同一个 authKey。而 Worker 无状态、请求之间不共享内存，
+所以必须把「未授权的 StringSession（含 authKey）+ phoneCodeHash」持久化到两次请求之间。
+
+→ 新增 `migrations/0004_login_flows.sql`：
+
+| 列 | 用途 |
+|---|---|
+| `id` | `crypto.randomUUID()`，不可猜测 |
+| `phone` / `phone_code_hash` | SignIn 回传 |
+| `session` | **未授权** StringSession（authKey 已生成、尚未绑定用户） |
+| `api_id` / `api_hash` | 空 = 回退 Worker Secret；非空 = 本次登录用的自定义凭据，成功后随账户保存 |
+| `stage` | `code` \| `password` \| `ready` |
+| `attempts` | 验证码/密码错误次数，≥5 作废 |
+| `expires_at` | 创建 +10 分钟；与 `datetime('now')` 同格式（空格无 Z），可直接字符串比较 |
+
+生命周期：`start` 时顺手清过期行；登录成功、取消、验证码过期、超次数都立即删行。
+
+### 19.11.2 驱动层：为什么不用 `client.start()`
+
+`client.start()` 是**交互式阻塞**流程（内部回调等输入），在 Worker 里会挂死（红线 #2）。
+改为手工三步，每步独立建连接、用完即断（与 cron / verify 同一套纪律）：
+
+```
+sendCode(phone)                      → { session, phoneCodeHash, isCodeViaApp }
+auth.SignIn({phoneNumber, phoneCodeHash, phoneCode}) → 成功 / SESSION_PASSWORD_NEEDED
+account.GetPassword + computeCheck + auth.CheckPassword → 成功
+```
+
+- `src/tg/login-flow.ts`：`LoginDriver` 接口 + `createGramDriver(env)` 真实实现 + `mapTelegramError`。
+- `client.session.save()` 的坑：抽象基类把 `save()` 声明为 `void`，只有 `StringSession` 实现返回
+  `string`。所以驱动里**自己持有 StringSession 实例**再调 `save()`，否则 TS 报
+  `TS1345: An expression of type 'void' cannot be tested for truthiness`。
+- `floodSleepThreshold: 0`：禁止 GramJS 自己 sleep 等限流窗口（Worker 等不起），让 `FLOOD_WAIT` 直接抛错。
+- 错误映射顺序很重要：`API_ID_PUBLISHED_FLOOD` / `PHONE_NUMBER_FLOOD` 都含 `FLOOD`，
+  **必须先精确匹配再走通用 FLOOD 规则**，否则会被误判成可重试的 `flood_wait`。
+
+### 19.11.3 路由层（`src/api/login.ts`）
+
+`createLoginRoutes(makeDriver)` 是工厂，driver 在请求期由 `makeDriver(c.env)` 创建——
+这样测试可以注入 fake driver，而校验/生命周期/落库/鉴权全走真实实现。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/accounts/login/start` | `{phone, api_id?, api_hash?}` → 201 `{flow_id, phone, is_code_via_app, expires_in_sec}` |
+| POST | `/api/accounts/login/code` | `{flow_id, code}` → `{stage:"ready", user}` 或 `{need_password:true, stage:"password"}` |
+| POST | `/api/accounts/login/password` | `{flow_id, password}` → `{stage:"ready", user}` |
+| POST | `/api/accounts/login/finish` | `{flow_id, name?}` → 201 `{account}`（查重 409、默认位接管、删 flow） |
+| GET | `/api/accounts/login/:flowId` | 当前阶段（前端刷新恢复用） |
+| DELETE | `/api/accounts/login/:flowId` | 取消，清掉未授权 session |
+
+全部注册在 `app.use("/api/*", authMiddleware)` **之后**，匿名一律 401（有测试覆盖 6 个端点）。
+`persistAccount` 复用 `src/account-shared.ts` 的 `ACCOUNT_COLS` / `shouldBecomeDefault`，
+与 `POST /api/accounts` 行为一致（重复账号 409、占位账户无 session 时接管默认位）。
+
+### 19.11.4 前端向导（`public/app.js` 的 `showAccountModal`）
+
+两个 tab：**手机号登录**（默认）/ **粘贴 Session**（保留原能力）。
+
+```
+步骤指示：1 手机号 → 2 验证码 → 3 保存
+手机号步骤：手机号 + 折叠的「高级：自己的 api_id/api_hash」
+验证码步骤：验证码 + 「验证码已发送到 App / 短信」提示 + 返回
+两步密码：仅当 need_password 时出现（type=password）
+保存步骤：显示「登录成功：@xxx（ID …）」+ 可编辑账户名
+```
+
+- 客户端校验：手机号正则 `/^\+?[1-9]\d{5,19}$/`（去空格/横线/括号、自动补 `+`）、
+  验证码 3-10 位数字；`api_id`/`api_hash` **要么都填要么都不填**。
+- 错误一律走 `loginErr(code)` 映射成中文；`api_id_restricted` / `invalid_api_credentials`
+  会自动展开「高级」区，省得用户再点一次。
+- 取消/切 tab 会 `DELETE` 掉服务端 flow（`dropFlow()`），不留未授权 session。
+- 新增 CSS：`.tabs` / `.tab` / `.steps` / `.step__dot` / `.adv`（`<details>` 折叠），
+  沿用既有令牌（`--surface-3`、`--radius-sm`、`--dur`/`--ease`），无新颜色。
+
+### 19.11.5 关键发现：公开 api_id 不能用来登录
+
+本地 dev 实测（真实连接，非 mock）：
+
+```
+POST /api/accounts/login/start {"phone":"+9999999999"}
+→ 8.27s  {"error":"api_id_restricted","detail":"API_ID_PUBLISHED_FLOOD"} [500]
+换号重试 3 次 + 换号码 → 同样（或 detail:"FLOOD"）
+```
+
+**`17349`（tdesktop 公开值）调用 `auth.sendCode` 被 Telegram 拒绝**，这与「已登录账号发消息」无关
+（cron 签到不调 sendCode，不受影响）。所以：
+
+- 网页登录（以及 `scripts/login.mjs`）**必须用自己申请的 api_id/api_hash**（my.telegram.org 免费）；
+- 向导已内置「高级」输入框，填了就随该账户一起保存，后续 cron 也用这组凭据；
+- 也可用 `wrangler secret put TG_API_ID` / `TG_API_HASH` 换掉服务端默认值。
+
+这条同时也解释了「为什么之前 session 一直没配上」——不是代码问题，是凭据被限。
+
+### 19.11.6 验证结果
+
+| 项 | 结果 |
+|---|---|
+| `npx tsc --noEmit` | ✅ 0 错误 |
+| `npx vitest run` | ✅ **167/167**（10 文件；新增 `tests/tg-login.test.ts` 18 例 + 前端契约 2 例） |
+| 迁移 | ✅ 0001→0004 顺序应用成功，`login_flows` 表 + 索引就位 |
+| 单元/集成（fake driver） | ✅ 完整链路、2FA 分支、手机号/验证码格式、flow 不存在/过期、阶段不符、错误累加 5 次作废、验证码过期清 flow、重复账号 409、取消清 flow、6 端点匿名 401、session 不外泄 |
+| 错误映射 | ✅ `PHONE_CODE_INVALID`/`PHONE_NUMBER_BANNED`/`FLOOD_WAIT_42`/`PASSWORD_HASH_INVALID`/未知/超时/`LoginError` 直通 |
+| **真实 Telegram 连接** | ✅ 8.27s 拿到 `API_ID_PUBLISHED_FLOOD`（证明 connect + sendCode 在未授权 session 上确实可用） |
+| 浏览器（bsk + Edge） | ✅ 向导结构（2 tab / 3 步 / 手机号 / 高级折叠默认关）；非法手机号前端拦截并留在本步；真实请求失败后中文提示 + 高级区**自动展开** + 按钮恢复；两 tab 来回切换正常；移动端 390×844 无横向溢出（`scrollWidth===clientWidth`，modal 358px） |
+| 控制台 | ✅ 无 JS 异常（仅预期的 401/500 HTTP 状态） |
+
+**未覆盖**：真实验证码 → 登录成功 → 拿到已授权 session 这一段，需要**用户自己的 api_id + 真实手机号**，
+无法自动化。代码路径已由 fake driver 全量覆盖，真实连接能力已由 `API_ID_PUBLISHED_FLOOD` 证明。
+
+### 19.11.7 顺手修的与新增的
+
+| 项 | 说明 |
+|---|---|
+| `tests/helpers/fake-db.ts` | 新增 `login_flows` 表支持（INSERT/SELECT/UPDATE/DELETE + 过期清理）；**修正 AUTOINCREMENT 起点**——原来 `autoId` 恒从 0 开始，预置 accounts 有 id 时新 INSERT 会撞 id，现改为从现有最大 id 继续 |
+| `src/account-shared.ts` | 抽出 `ACCOUNT_COLS` / `shouldBecomeDefault` / `grantDefault`，供 `api/accounts.ts` 与 `api/login.ts` 共用，避免两处漂移 |
+| `src/util.ts` | 新增 `sqliteNow(offsetMs)`：生成与 `datetime('now')` **完全同格式**的串（UTC/空格/无 Z），避免再次踩「时间格式双轨」的坑 |
+| `src/index.ts` | `/api/accounts/login` 挂在 `/api/accounts` 之前（路径不冲突，两段 vs 一段） |
+| `.dev.vars` | 本地 dev 需要它才能起（gitignored，已确认被忽略）；内容为公开 api_id + 本地口令，未提交 |
+
+### 19.11.8 仍未解决
+
+1. **未部署**：需先 `npm run db:migrate:remote`（应用 0004，纯新增表）再 `npm run deploy`。
+2. **需要用户自己的 api_id**：否则网页登录在线上同样会被 `API_ID_PUBLISHED_FLOOD` 拒绝。
+3. **刷新丢失 flow**：`flowId` 只在前端内存里，刷新页面需重来（服务端 flow 仍会在 10 分钟后自动清理，无残留风险）。
+   若将来要支持"刷新恢复"，可在 `sessionStorage` 存 flowId 并调 `GET /api/accounts/login/:flowId`。
+4. **多账户并发登录**：当前允许多个 flow 并存（各自独立 authKey），未做上限。极端情况下可加
+   `DELETE FROM login_flows WHERE phone = ?` 防同号重复发起。
