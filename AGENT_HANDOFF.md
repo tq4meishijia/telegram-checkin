@@ -11,11 +11,11 @@
 
 - **进度**：M0–M6 全部完成并上线；2026-10-24 先后完成「安全/稳定性加固」「全量代码通读」「多账户 + 密码修改 + 前端重构」三轮迭代（变更清单见 §17 / §19），M7 剩余项未开始。
 - **线上地址**：https://telegram-checkin.tq4meishijia.workers.dev （2026-10-24 重命名后的新地址；旧地址 tg-checkin.… 随 Worker 名变更已失效）
-- **⚠️ 部署状态**：线上版本 `fa921228`（2026-10-24 15:55，含多账户/密码/前端重构）。**本次「网页交互式登录」改动尚未部署**——需先 apply `0004_login_flows.sql`（纯新增表，不动存量数据）再 deploy。详见 §19.11。
+- **部署状态**：✅ **已上线（2026-10-24 17:10）**——线上版本 **`e213c434-d6e0-4906-8879-04972a11c7fe`**，含「网页交互式登录 Telegram 账号」；先 apply `0004_login_flows.sql` 再 deploy（严守红线 #8），详见 §19.12。上一版 `fa921228` 是多账户/密码/前端重构（§19.8）。
   - **0003 迁移对存量库的影响**：自动把 `settings.tg_session` 迁成 1 号「默认账户」（`is_default=1`、`status='ok'`），存量任务 `account_id` 回填为 1，并删除 settings 旧键。**实测本次线上库迁移前 settings/tasks 均为空**，故只建出 1 号空 session 占位账户（`status='unknown'`）。
   - **登录口令**：线上 `ADMIN_PASSWORD` secret 已设置（`wrangler secret list` 确认三个 secret 齐全），因此登录口令是**该 secret 的强随机值**，不是 `admin`；`admin` 仅在该 secret 未设置时生效。改过密码后以 `settings.admin_pw_hash` 为唯一准绳。
   - **线上待办**：Telegram session 未配置（1 号账户 `session` 为空、`status='unknown'`）——可用网页「账户页 → 添加账户 → 手机号登录」（§19.11），或跑 `scripts/login.mjs` 后粘贴 StringSession。
-  - **⚠️ 公开 api_id 的硬限制**：`TG_API_ID=17349`（tdesktop 公开值）调用 `auth.sendCode` 会被 Telegram 拒绝（`API_ID_PUBLISHED_FLOOD` / `FLOOD`），**新登录必须用自己申请的 api_id/api_hash**；已登录账号发消息（cron 签到）不受影响。详见 §19.11。
+  - **公开 api_id 的可用性（已实测，按来源 IP 而异）**：`TG_API_ID=17349`（tdesktop 公开值）在**本地 dev**（家宽/代理出口）调 `auth.sendCode` 被拒（`API_ID_PUBLISHED_FLOOD`），但在**线上 Worker**（Cloudflare 出口 IP）同一 api_id **成功返回 201**。说明这是按来源 IP 的风控限流，不是 api_id 全局封禁。线上可直接用默认值；若某天遇到 `api_id_restricted`，再在向导「高级」里填自己的 api_id/api_hash。已登录账号发消息（cron 签到）不受影响。详见 §19.11.5 / §19.12。
 - **线上现有数据**：1 个任务「每日签到」（目标 `me`、指令 `/checkin`、daily 08:00 Asia/Shanghai）；有成功/失败日志若干。
 - **代码健康度**：`npx tsc --noEmit` 无错误；vitest **167/167** 通过（10 个测试文件）；包体 gzip 约 340 KiB（远低于 3MB 上限）。
 - **QA 验证（2026-10-24）**：加固轮全量测试 **IS_PASS: YES**（单测 72/72、冒烟 7/7、对抗探测 8/8），报告 `docs/qa-report-2026-10-24.md`；多账户轮验证见 §19.4。
@@ -851,7 +851,7 @@ account.GetPassword + computeCheck + auth.CheckPassword → 成功
 - 新增 CSS：`.tabs` / `.tab` / `.steps` / `.step__dot` / `.adv`（`<details>` 折叠），
   沿用既有令牌（`--surface-3`、`--radius-sm`、`--dur`/`--ease`），无新颜色。
 
-### 19.11.5 关键发现：公开 api_id 不能用来登录
+### 19.11.5 关键发现：公开 api_id 的限流是「按来源 IP」的
 
 本地 dev 实测（真实连接，非 mock）：
 
@@ -861,14 +861,23 @@ POST /api/accounts/login/start {"phone":"+9999999999"}
 换号重试 3 次 + 换号码 → 同样（或 detail:"FLOOD"）
 ```
 
-**`17349`（tdesktop 公开值）调用 `auth.sendCode` 被 Telegram 拒绝**，这与「已登录账号发消息」无关
-（cron 签到不调 sendCode，不受影响）。所以：
+同一段代码、同一个 `api_id=17349`，**部署到线上后**（Cloudflare 出口 IP）却成功了：
 
-- 网页登录（以及 `scripts/login.mjs`）**必须用自己申请的 api_id/api_hash**（my.telegram.org 免费）；
-- 向导已内置「高级」输入框，填了就随该账户一起保存，后续 cron 也用这组凭据；
-- 也可用 `wrangler secret put TG_API_ID` / `TG_API_HASH` 换掉服务端默认值。
+```
+POST https://telegram-checkin.tq4meishijia.workers.dev/api/accounts/login/start
+{"phone":"+9999999999"} → 7.83s  201 {"flow_id":"d8f89f57-…","stage":"code","is_code_via_app":false}
+```
 
-这条同时也解释了「为什么之前 session 一直没配上」——不是代码问题，是凭据被限。
+结论（已由 §19.12 的线上验证确认）：
+
+- `API_ID_PUBLISHED_FLOOD` 是 Telegram 对**来源 IP** 的风控限流，不是 api_id 全局封禁；
+  本地家宽/代理出口被标记，Cloudflare 的出口 IP 没有被标记。
+- 所以线上**可以先用默认 `17349` 直接登录**；只有真遇到 `api_id_restricted` 才需要在向导
+  「高级」里填自己申请的 `api_id`/`api_hash`（my.telegram.org 免费），填了会随该账户保存，
+  后续 cron 也用这组凭据。
+- 对不存在的号码 `sendCode` 也返回成功是 Telegram 的**防枚举设计**（验证码不会真的发出），
+  所以「返回 201」只能证明链路通，不能证明号码有效。
+- 已登录账号发消息（cron 签到）不调 `sendCode`，任何情况下都不受此限制影响。
 
 ### 19.11.6 验证结果
 
@@ -904,3 +913,51 @@ POST /api/accounts/login/start {"phone":"+9999999999"}
    若将来要支持"刷新恢复"，可在 `sessionStorage` 存 flowId 并调 `GET /api/accounts/login/:flowId`。
 4. **多账户并发登录**：当前允许多个 flow 并存（各自独立 authKey），未做上限。极端情况下可加
    `DELETE FROM login_flows WHERE phone = ?` 防同号重复发起。
+
+---
+
+## 19.12 上线记录（2026-10-24 17:10，用户下令「上线」）
+
+**顺序**（严守红线 #8：先迁移再 deploy）：预检 → 验证门 → 远程迁移 → 部署 → 线上验证 → 清测试数据 → 文档同步。
+
+### 预检
+- `git status`：工作区干净（上一轮 `f116d8a` 已推送）
+- `npx wrangler d1 migrations list --remote`：仅 `0004_login_flows.sql` 待应用
+- `npx wrangler secret list`：`ADMIN_PASSWORD` / `TG_API_HASH` / `TG_API_ID` 三个齐全
+- `npm run verify`：tsc 0 错误 + vitest **167/167**
+
+### 迁移与部署
+- `npx wrangler d1 migrations apply telegram-checkin-db --remote` → `0004_login_flows.sql` ✅（3 条命令，0.76ms）
+- 迁移后核对：6 张业务表齐全（accounts / login_attempts / login_flows / run_logs / settings / tasks），`login_flows` 0 行，1 号账户 `status='invalid'`（历史 cron 在无 session 时的正常标记）
+- `npm run deploy` → 版本 **`e213c434-d6e0-4906-8879-04972a11c7fe`**，2 个静态资源上传（`/app.js` `/style.css`），gzip **343.32 KiB**，Startup 75ms，cron `* * * * *` 已注册
+
+### 线上验证（全过）
+
+| 项 | 结果 |
+|---|---|
+| `/api/health` | 200 `{"ok":true}` |
+| 登录 5 个端点匿名访问（start/code/password/finish/`:flowId`） | 全 **401** |
+| 线上 `app.js` 新标记 | 9 处（4 个 login 端点 + `loginErr` + `am-api-id` + `stepsHtml` 等） |
+| 线上 `style.css` 向导样式 | 12 处（`.tabs` / `.step__dot` / `.adv` 等） |
+| 安全响应头 | CSP + `X-Content-Type-Options: nosniff` |
+| 登录口令 | 上一轮交付的强随机值仍有效（200），说明用户尚未改密 |
+| **真实 `sendCode`（线上）** | ✅ **201**，7.83s，`{"flow_id":"d8f89f57-…","stage":"code","is_code_via_app":false}` |
+| 手机号格式校验 | 400 `invalid_phone`（不打网络） |
+| `DELETE /api/accounts/login/:flowId` | 200 `{ok:true}`；再查同 id → 404 `flow_not_found` |
+| 生产库无残留 | `SELECT COUNT(*) FROM login_flows` → **0**（测试 flow 已主动删除） |
+| **cron 真实触发** | `wrangler tail` 连续两轮：`outcome: ok`、**cpuTime 1ms**、`exceptions: []`、`scriptVersion.id = e213c434…`（正是本次版本） |
+
+### 对 §19.11.5 结论的修正（重要）
+
+同一个 `api_id=17349`：**本地 dev 被拒**（`API_ID_PUBLISHED_FLOOD`），**线上 Worker 成功**（201）。
+→ 该限流是**按来源 IP** 的风控，不是 api_id 全局封禁。因此：
+
+- 线上可以先用默认 `17349` 登录，不需要先申请 api_id；
+- 「高级：自定义 api_id/api_hash」保留为**兜底**（真遇到 `api_id_restricted` 时用）；
+- 对不存在的号码 `sendCode` 也返回成功是 Telegram 的**防枚举设计**（验证码不会真发出），
+  所以 201 只证明链路通，不证明号码有效。
+
+### 遗留（用户侧）
+1. **1 号账户仍是 `status='invalid'`、session 为空**——现在可以直接在网页「账户页 → 添加账户 → 手机号登录」用真实手机号完成登录，不需要本地脚本、不需要自备 api_id。
+2. 登录后建议在「设置」页把管理口令改成自己的（当前是上一轮交付的强随机值）。
+3. 观察 `login_flows` 表不积压（10 分钟 TTL + start 时清理 + 成功/取消即删，正常应恒为 0 行）。

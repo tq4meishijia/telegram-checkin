@@ -85,13 +85,14 @@ npm run verify
 - 中间态（未授权 session + `phoneCodeHash`）存在 `login_flows` 表，**10 分钟过期**，登录成功或取消即删。
 - 同一验证码流程最多试 5 次，超过作废；同一 Telegram 账号重复添加返回 409。
 
-> **⚠️ 必须先用自己的 api_id**：Telegram 禁止用公开 api_id 发送验证码。
-> 项目默认的 `17349`（tdesktop 公开值）调用 `sendCode` 会返回 `API_ID_PUBLISHED_FLOOD`，
-> 向导会提示「服务端配置的 api_id 是公开值」并自动展开「高级」区。
-> 解决：到 [my.telegram.org](https://my.telegram.org) → API development tools 免费申请一组
-> `api_id` / `api_hash`，填进「高级」里（只影响本次登录，会随账户一起保存），
+> **关于 api_id**：项目默认用 `17349`（Telegram Desktop 公开值）。
+> Telegram 对公开 api_id 有**按来源 IP** 的风控：本地家宽/代理出口可能被拒
+> （`API_ID_PUBLISHED_FLOOD`，向导会提示「服务端配置的 api_id 是公开值」并自动展开「高级」区），
+> 但**线上 Worker（Cloudflare 出口 IP）实测可以直接用**（2026-10-24 验证返回 201）。
+> 若线上也遇到 `api_id_restricted`：到 [my.telegram.org](https://my.telegram.org) → API development tools
+> 免费申请一组 `api_id` / `api_hash`，填进「高级」里（随该账户保存，后续 cron 也用这组），
 > 或用 `npx wrangler secret put TG_API_ID` / `TG_API_HASH` 换掉服务端默认值。
-> 注意：已登录的账号发消息（cron 签到）**不受此限制**，只有新登录需要。
+> 注意：已登录的账号发消息（cron 签到）不调 `sendCode`，**任何情况下都不受此限制**。
 
 ### 方式 B：本地脚本导出 Session
 
@@ -172,7 +173,7 @@ npm run db:export   # 导出到 backups/telegram-checkin-db.sql（gitignored，�
 
 | 日期 | 变更 | 提交 |
 |---|---|---|
-| 2026-10-24 | **网页交互式登录**：账户页「+ 添加账户」新增手机号向导（手机号 → 验证码 → 两步密码 → 命名保存），全程在服务端完成，不依赖本地脚本；新增 `login_flows` 表（迁移 0004，10 分钟过期、用完即删）与 `/api/accounts/login/{start,code,password,finish}` 四个端点 + 状态查询/取消；支持自定义 `api_id`/`api_hash`（公开值 `17349` 会被 Telegram 拒绝 `sendCode`）；Telegram 错误统一映射为中文提示；新增 20 例测试（147 → **167**） | 见 `git log` |
+| 2026-10-24 | **网页交互式登录**：账户页「+ 添加账户」新增手机号向导（手机号 → 验证码 → 两步密码 → 命名保存），全程在服务端完成，不依赖本地脚本；新增 `login_flows` 表（迁移 0004，10 分钟过期、用完即删）与 `/api/accounts/login/{start,code,password,finish}` 四个端点 + 状态查询/取消；支持自定义 `api_id`/`api_hash` 兜底（公开值 `17349` 在部分来源 IP 会被限流 `API_ID_PUBLISHED_FLOOD`）；Telegram 错误统一映射为中文提示；新增 20 例测试（147 → **167**）。**已上线**，版本 `e213c434` | 见 `git log` |
 | 2026-10-24 | **多账户 + 密码修改 + 前端重构（已上线）**：新增 `accounts` 表与 `/api/accounts`（增删改查/验证/切换/默认，重复登录 409 拦截，级联删除）；runner 按任务所属账户取 session，会话失效自动标记账户 invalid；新增 `/api/password`（PBKDF2 哈希 + 强度校验 + 二次确认，改后全局吊销会话）；`public/` 按 Bento Grid 风格重写（响应式三档断点 + 暗色模式 + reduced-motion）；顺带修复 P0-1 未鉴权 logout、P1-1 时区下拉静默改写、P1-2 `Origin: null` 500、P2-2 DELETE 404、P2-3 upcoming 含过期、P2-4 历史脏排期阻塞启停、P2-8 补 `nosniff`，以及浏览器实测发现的 esc 漏定义与 api() 401 误跳转；单测 72 → **141**；线上版本 `fa921228`，cron cpuTime 实测 1ms | 见 `git log` |
 | 2026-10-24 | 全量代码通读与实测验证，产出 `docs/project-overview-2026-10-24.md` | 见 `git log` |
 | 2026-10-24 | **上线成功**：清场重建（删旧 Worker/空库 → 新建 telegram-checkin-db → 迁移 → secrets → deploy），线上 https://telegram-checkin.tq4meishijia.workers.dev 全链路验证通过（登录/Cookie/D1 读写/限流 429/CSP）；Telegram 凭据统一为 tdesktop 公开值 | `874e766` 等 |
