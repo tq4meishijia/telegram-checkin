@@ -11,8 +11,7 @@
 
 - **进度**：M0–M6 全部完成并上线；2026-10-24 完成一轮安全/稳定性加固（变更清单见 §17），M7 剩余项未开始。
 - **线上地址**：https://tg-checkin.tq4meishijia.workers.dev
-- **线上状态**：Worker 已部署、远程 D1 已应用 **0001** 迁移、3 个 secrets 已配置、真实 Telegram Session 已保存并验证可发消息。
-  > ⚠️ **部署加固版代码前必须先** `npm run db:migrate:remote`（0002 迁移新增 `login_attempts` 表和 `tasks.fail_streak` 列，新版代码依赖它们）。
+- **线上状态**：⚠️ **2026-10-24 实测：线上已不可用**——`https://tg-checkin.tq4meishijia.workers.dev` 返回 Cloudflare 错误 1042；当前登录账号（`3312884334@qq.com's Account`）下 **Worker `tg-checkin` 不存在**（API 错误 10007）、**wrangler.toml 引用的 D1 `tg-checkin-db`（5965162f-0f03-4f75-875f-7e3724cb7e2a）不存在**（错误 7404）；该账号下只有一个 2026-09-28 创建的**空库** `cf-tg-checkin-db`（ba149de2-29b6-4d7c-b3db-355862a7c44d，0 张表）。原交接文档所称"已上线"与当前实测不符，疑似原资源建于**其他 Cloudflare 账号**或已被删除。**上线流程已中止，待用户确认账号归属**（见 §15-8）。
 - **线上现有数据**：1 个任务「每日签到」（目标 `me`、指令 `/checkin`、daily 08:00 Asia/Shanghai）；有成功/失败日志若干。
 - **代码健康度**：`npx tsc --noEmit` 无错误；vitest **72/72** 通过（5 个测试文件）；包体 gzip 约 333 KiB（远低于 3MB 上限）。
 - **QA 验证（2026-10-24）**：全量测试 **IS_PASS: YES**——单测 72/72、typecheck 0 错误、fake D1 集成 17/17、wrangler dev 冒烟 7/7、对抗探测 8/8；报告 `docs/qa-report-2026-10-24.md`。遗留 2 个低危项（N1 静态资源 CSP dev 行为偏差、N2 偶发 flaky），见 §15 待办。
@@ -417,7 +416,7 @@ npx wrangler deploy
 7. **迁移到 teleproto**：仅当 `telegram` 出现安全问题或必须缺失特性时启动（见 §14 注）。
 
 **当前最高优先（用户侧操作，做前确认）**：
-8. **部署加固版到线上**（用户下令即执行）：wrangler 写权限已就绪（见 §0）→ `npm run db:migrate:remote`（应用 0002）→ `npm run deploy` → 面板 Logs/Metrics 观察一轮。顺序不可反（见 §10）。
+8. **上线（当前受阻，待用户决策）**：2026-10-24 首次执行 `db:migrate:remote` 即失败——当前账号下无 `tg-checkin-db`（7404）、无 Worker（10007），线上 URL 已 1042。需用户确认：**(a)** 原资源是否在另一个 Cloudflare 账号（重新 `wrangler login` 选对账号后按原顺序 migrate → deploy）；**(b)** 若原资源已丢失，则走全新部署：修正 wrangler.toml 的 database_id（或新建库）→ migrate → **用户提供 3 个 secrets（TG_API_ID/TG_API_HASH/ADMIN_PASSWORD，本地无 .dev.vars）** → deploy → **用户重新跑 scripts/login.mjs 拿新 StringSession**（旧 session 随旧库丢失）。
 9. ~~**N2 flaky 处置**~~：✅ 2026-10-24 已根因修复——capture_reply 用例改 fake timers（消除唯一真实计时依赖），未加 `--retry`（保持 CI 严格）；连续 8 轮全量测试 8/8 全绿（修复前复现率约 12%）。
 10. ~~**N1 收尾**~~：✅ 2026-10-24 已闭环——`run_worker_first` 扩为 `["/", "/app.js", "/style.css"]`，dev 实测三类路径均带 CSP 头（`/` HTML、`/app.js` JS、`/style.css` CSS，content-type 均正常）；其余端点回归无破（health/scheduled/404/401 正常）。
 11. ~~**`.gitignore` 的 `.ddev/` 疑似笔误**~~：✅ 2026-10-24 已删除。研究结论：`.ddev/` 是 DDEV（Docker 版 PHP 本地开发工具的配置目录），本仓库 Node/Cloudflare 技术栈零依赖，属误入行。
@@ -489,3 +488,14 @@ npx wrangler deploy
 - **N2 根因修复**：`tests/runner.test.ts` capture_reply 用例改 fake timers（`vi.advanceTimersByTimeAsync(1000)`），消除唯一真实计时依赖；**连续 8 轮 `npm test` 全绿**（修复前约 12% 偶发失败）。未采用 `--retry`，保持 CI 严格。顺带副作用：套件耗时 1.5s → 0.65s。
 - **`.ddev/` 删除**：研究确认其为 DDEV（PHP Docker 工具）配置目录名，与本仓库技术栈无关，属误入 `.gitignore` 的笔误行，已删。
 - **wrangler 登录（不上线）**：`npx wrangler login` 成功（NO_PROXY=localhost,127.0.0.1），`whoami` 确认 `tq4meishijia@gmail.com`；首次授权仅 read scopes，用户当日二次授权补齐写权限（workers/workers_scripts/d1 等 write，已核实）——部署无权限障碍。未执行任何 migrations apply --remote / deploy。
+
+### 18.4 首次上线尝试与受阻记录（2026-10-24）
+
+- **执行**：用户下令上线 → 先跑 `npm run db:migrate:remote`（严守先迁移后部署）。
+- **结果**：失败，未部署。证据链：
+  1. `d1 migrations apply --remote` → 错误 7404：`tg-checkin-db`（5965162f…）在当前账号不存在；
+  2. `wrangler d1 list` → 当前账号仅有 `cf-tg-checkin-db`（ba149de2…，2026-09-28 创建，**0 张表**）；
+  3. `wrangler deployments list --name tg-checkin` → 错误 10007：Worker 不存在于当前账号；
+  4. `curl https://tg-checkin.tq4meishijia.workers.dev/api/health` → 错误 1042（线上无 Worker 服务）。
+- **判断**：原"已上线"状态（§0 旧记载）与实测不符；原 Worker/D1/secrets/session 要么在**其他 Cloudflare 账号**，要么已丢失。**未做任何破坏性操作**（未 deploy、未建库、未改 wrangler.toml）。
+- **待用户决策**：见 §15-8 的 (a)/(b) 两条路径。
