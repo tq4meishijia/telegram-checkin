@@ -219,22 +219,30 @@ describe("runner - 失败告警与回复抓取", () => {
   });
 
   it("capture_reply 只取本次发送之后、非自己的消息", async () => {
-    const task = baseTask({ capture_reply: 1, reply_wait_sec: 1 });
-    const { env } = makeEnv([task]);
-    mocks.withClient.mockImplementation(async (_env: unknown, fn: any) =>
-      fn({
-        sendMessage: async () => ({ id: 100 }),
-        getMessages: async () => [
-          { id: 300, out: true, message: "我自己发的指令" },
-          { id: 50, out: false, message: "历史旧回复" },
-          { id: 200, out: false, message: "本次新回复" },
-        ],
-      })
-    );
+    // fake timers：消除对真实 1s 计时的依赖（QA 报告 N2，偶发 flaky 根因）
+    vi.useFakeTimers();
+    try {
+      const task = baseTask({ capture_reply: 1, reply_wait_sec: 1 });
+      const { env } = makeEnv([task]);
+      mocks.withClient.mockImplementation(async (_env: unknown, fn: any) =>
+        fn({
+          sendMessage: async () => ({ id: 100 }),
+          getMessages: async () => [
+            { id: 300, out: true, message: "我自己发的指令" },
+            { id: 50, out: false, message: "历史旧回复" },
+            { id: 200, out: false, message: "本次新回复" },
+          ],
+        })
+      );
 
-    const result = await executeWithClaim(env, task);
+      const p = executeWithClaim(env, task);
+      await vi.advanceTimersByTimeAsync(1000); // 推进 reply_wait_sec = 1s 的等待
+      const result = await p;
 
-    expect(result.detail).toBe("本次新回复");
+      expect(result.detail).toBe("本次新回复");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("单任务 25 秒超时：记 failed 且不挂起整轮", async () => {

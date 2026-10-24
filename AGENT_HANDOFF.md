@@ -18,6 +18,7 @@
 - **QA 验证（2026-10-24）**：全量测试 **IS_PASS: YES**——单测 72/72、typecheck 0 错误、fake D1 集成 17/17、wrangler dev 冒烟 7/7、对抗探测 8/8；报告 `docs/qa-report-2026-10-24.md`。遗留 2 个低危项（N1 静态资源 CSP dev 行为偏差、N2 偶发 flaky），见 §15 待办。
 - **代码仓库**：https://github.com/tq4meishijia/cf-tg-checkin （**公开**仓库，MIT LICENSE）。
 - **CI**：`.github/workflows/ci.yml`，push/PR 自动跑 `npm ci` + typecheck + test。
+- **wrangler 登录态（2026-10-24）**：已 OAuth 登录（`tq4meishijia@gmail.com`，账号 `3312884334@qq.com's Account`），**写权限 scopes 已补齐**（workers/workers_scripts/d1 等 write，当日二次授权确认）——远程迁移与部署已无权限障碍，只差用户下令执行。
 
 > 敏感信息（管理密码、StringSession、api_hash）**不在任何已提交文件里**，位置见第 11 节。
 
@@ -203,7 +204,7 @@ tg-checkin-serverless/
 - 密码比对：SHA-256 双摘要 + 恒定时间比较（无计时侧信道）。
 - 登录限流：同 IP 60 秒 5 次失败 → 429（D1 `login_attempts` 表）。
 - CSRF：所有跨站 Origin 的 POST/PUT/PATCH/DELETE → 403 `origin_mismatch`（SameSite=Lax 之外的纵深）。
-- CSP：**HTML 文档响应**带 `Content-Security-Policy`（script-src 'self'；前端已无内联脚本/事件处理器）。注：dev 实测 JS/CSS 由 assets 层直接服务、不经过 Worker 故不带头（QA 报告 N1）——CSP 是文档级策略，HTML 带头即生效，无实际防护影响；线上 `run_worker_first` 前缀匹配行为未验证。
+- CSP：**HTML 文档与静态资源（/app.js、/style.css）响应**均带 `Content-Security-Policy`（script-src 'self'；前端已无内联脚本/事件处理器）。实现方式：`run_worker_first=["/", "/app.js", "/style.css"]` 让这三类路径先进 Worker，由 catch-all 回退 ASSETS 时统一附加（dev 实测生效；线上前缀匹配行为未验证）。
 
 **任务字段（POST/PATCH body）**：`name, bot_username, command, schedule_type, schedule_value, timezone, jitter_minutes, capture_reply, reply_wait_sec, enabled`。
 
@@ -336,7 +337,7 @@ npx wrangler deploy
 
 `wrangler.toml` 关键点：
 - `compatibility_flags=["nodejs_compat"]`（GramJS 需要 Buffer / node:net）。
-- `[assets]` 用 **`run_worker_first=["/"]`**：页面路径先打到 Worker，`/api/*` 由 Hono 处理，其余走 catch-all 回退 ASSETS 并附加 CSP 头（dev 实测：JS/CSS 由 assets 层直接服务不带头，见 §5 安全机制注）。
+- `[assets]` 用 **`run_worker_first=["/", "/app.js", "/style.css"]`**：页面与静态资源都先打到 Worker，`/api/*` 由 Hono 处理，其余走 catch-all 回退 ASSETS 并统一附加 CSP 头（dev 实测三类路径均带头）。
 - `src/index.ts` 末尾 catch-all `app.get("*", c => c.env.ASSETS.fetch(c.req.raw))` 必须放在所有 /api 路由之后。
 
 线上 cron **不能**手动触发，要等真实整分钟（可能有几十秒抖动）。
@@ -382,7 +383,7 @@ npx wrangler deploy
 7. **抓回复要同时过滤 `m.out` 和 `id <= 本次发送 id`**，否则机器人本次没回复时会抓到历史旧消息。
 8. **vitest 默认 forks 进程池在部分 Windows 环境加载即崩**（Node 22/24 均复现，与项目代码无关）→ `vitest.config.ts` 已固定 `pool: "vmForks"`；换机器/CI 若遇 `npm test` 假失败，先试这个。
 9. **沙箱/代理环境里 curl 打本地 dev 端口可能被环境代理拦截**（换端口如 8788 会被代理层吞掉）→ 用项目默认 8787，并加 `--noproxy '*'`。
-10. **`run_worker_first=["/api/*"]` 时页面不经过 Worker**，响应头加不上 CSP → 已改为 `["/"]`（页面经 catch-all 带头；但 dev 实测 JS/CSS 仍由 assets 层直接服务不带头，见 QA 报告 N1——CSP 是文档级策略，HTML 带头即生效）。
+10. **`run_worker_first=["/api/*"]` 时页面不经过 Worker**，响应头加不上 CSP → 已改为 `["/", "/app.js", "/style.css"]`：三类路径都经 Worker，catch-all 回退 ASSETS 时统一带头（dev 实测 `/`、`/app.js`、`/style.css` 均带头，QA N1 已闭环）。
 
 ---
 
@@ -416,10 +417,10 @@ npx wrangler deploy
 7. **迁移到 teleproto**：仅当 `telegram` 出现安全问题或必须缺失特性时启动（见 §14 注）。
 
 **当前最高优先（用户侧操作，做前确认）**：
-8. **部署加固版到线上**：`npm run db:migrate:remote`（应用 0002）→ `npm run deploy` → 面板 Logs/Metrics 观察一轮。顺序不可反（见 §10）。
-9. **N2 flaky 处置**（QA 报告）：CI 加 `vitest run --retry 1`，或将 capture_reply 时序敏感用例改 fake timers。待用户确认是否现在做。
-10. **N1 收尾**（QA 报告）：wrangler.toml 注释已改为准确描述（仅 HTML 带头）；若要求 JS/CSS 也带头，需 `run_worker_first` 扩为 `["/", "/app.js", "/style.css"]` 并回归。待用户确认。
-11. **`.gitignore` 的 `.ddev/` 疑似笔误**（全仓库无工具生成该目录）：待确认后删除该行或修正为 `.dev/`。
+8. **部署加固版到线上**（用户下令即执行）：wrangler 写权限已就绪（见 §0）→ `npm run db:migrate:remote`（应用 0002）→ `npm run deploy` → 面板 Logs/Metrics 观察一轮。顺序不可反（见 §10）。
+9. ~~**N2 flaky 处置**~~：✅ 2026-10-24 已根因修复——capture_reply 用例改 fake timers（消除唯一真实计时依赖），未加 `--retry`（保持 CI 严格）；连续 8 轮全量测试 8/8 全绿（修复前复现率约 12%）。
+10. ~~**N1 收尾**~~：✅ 2026-10-24 已闭环——`run_worker_first` 扩为 `["/", "/app.js", "/style.css"]`，dev 实测三类路径均带 CSP 头（`/` HTML、`/app.js` JS、`/style.css` CSS，content-type 均正常）；其余端点回归无破（health/scheduled/404/401 正常）。
+11. ~~**`.gitignore` 的 `.ddev/` 疑似笔误**~~：✅ 2026-10-24 已删除。研究结论：`.ddev/` 是 DDEV（Docker 版 PHP 本地开发工具的配置目录），本仓库 Node/Cloudflare 技术栈零依赖，属误入行。
 12. **`compatibility_date` 上调**：需 wrangler dev 完整回归（登录/cron/GramJS 连接）后单独处理，不做常规维护动作。
 
 ---
@@ -481,3 +482,10 @@ npx wrangler deploy
 - HANDOFF/README 已同步至当前状态；QA 报告提交进仓库 `docs/`。
 - CSP 描述按 dev 实测修正：HANDOFF §5/§10/§13、`wrangler.toml` 注释、README 架构段（原文案"静态响应统一带 CSP"不准确，实际仅 HTML 文档响应带头）。
 - 提交记录见 `git log`（docs: 同步 HANDOFF/README + QA 报告入库）。
+
+### 18.3 QA 遗留项闭环 + wrangler 登录（2026-10-24 下午）
+
+- **N1 闭环**：`run_worker_first` 扩为 `["/", "/app.js", "/style.css"]`；dev 实测 `/`、`/app.js`、`/style.css` 均返回 CSP 头且 content-type 正常；回归 health 200 / scheduled 200 / 404 / 无 Cookie 401 无破。
+- **N2 根因修复**：`tests/runner.test.ts` capture_reply 用例改 fake timers（`vi.advanceTimersByTimeAsync(1000)`），消除唯一真实计时依赖；**连续 8 轮 `npm test` 全绿**（修复前约 12% 偶发失败）。未采用 `--retry`，保持 CI 严格。顺带副作用：套件耗时 1.5s → 0.65s。
+- **`.ddev/` 删除**：研究确认其为 DDEV（PHP Docker 工具）配置目录名，与本仓库技术栈无关，属误入 `.gitignore` 的笔误行，已删。
+- **wrangler 登录（不上线）**：`npx wrangler login` 成功（NO_PROXY=localhost,127.0.0.1），`whoami` 确认 `tq4meishijia@gmail.com`；首次授权仅 read scopes，用户当日二次授权补齐写权限（workers/workers_scripts/d1 等 write，已核实）——部署无权限障碍。未执行任何 migrations apply --remote / deploy。

@@ -10,7 +10,7 @@
 Cron(* * * * *) → cron/runner 扫 tasks 表 due 任务 → GramJS connect → sendMessage → disconnect
                      ↓ 写 run_logs / 重算 next_run_at
 浏览器 → Hono API(/api/*，HMAC Cookie 鉴权 + 登录限流 + Origin 校验) → D1(settings/tasks/run_logs/login_attempts)
-       → Static Assets(public/ 原生 SPA，HTML 响应带 CSP)
+       → Static Assets(public/ 原生 SPA，页面与静态资源响应均带 CSP)
 ```
 
 - 调度不依赖 cron 表达式解析，靠 `next_run_at` 字段；补跑容忍 30 分钟，超时跳过。
@@ -82,6 +82,8 @@ npm run deploy
 ```
 
 > **更新部署顺序：先 apply 迁移，再 deploy。** 0002 迁移新增 `login_attempts` 表和 `tasks.fail_streak` 列，新版代码依赖它们；顺序反了会让签到执行报错。
+>
+> **部署前确认 wrangler token 有写权限**：`npx wrangler whoami` 应能看到 `workers:write`/`d1:write` 等 scope；只有 read scopes 时重新 `npx wrangler login` 并勾选全部权限。
 
 ## 备份
 
@@ -104,13 +106,13 @@ npm run db:export   # 导出到 backups/tg-checkin-db.sql（gitignored，请自�
 - `telegram`(GramJS) 2.26.22 已被官方标记 archived（后继分支 `teleproto`）。当前版本功能稳定、暂不迁移，但需关注上游安全更新（见 AGENT_HANDOFF §14）。
 - 管理端登录态为无状态 Cookie，不支持单独吊销某一个 Cookie；「退出登录」采用全局吊销（epoch +1）。
 - StringSession 明文存 D1：拿到 D1 读取权限 = 拿到账号控制权，请妥善保管 Cloudflare 账号与 Worker 部署权限。
-- CSP 仅附加在 HTML 文档响应上（JS/CSS 静态文件不附加该头，无实际防护影响；详见 AGENT_HANDOFF §5）。
 
 ## 变更记录
 
 | 日期 | 变更 | 提交 |
 |---|---|---|
-| 2026-10-24 | 测试验证 + 文档同步：QA 全量测试 IS_PASS（单测 72/72、冒烟 7/7、对抗探测 8/8），QA 报告入库 `docs/`，CSP 描述按实测修正 | 见 `git log` 最新 docs 提交 |
+| 2026-10-24 | QA 遗留闭环：JS/CSS 静态资源也带 CSP 头（run_worker_first 扩展）、capture_reply 测试改 fake timers 消除偶发 flaky（8/8 轮稳定）、删除 `.gitignore` 中误入的 `.ddev/` 行、wrangler 已登录（token 待补写权限） | 见 `git log` |
+| 2026-10-24 | 测试验证 + 文档同步：QA 全量测试 IS_PASS（单测 72/72、冒烟 7/7、对抗探测 8/8），QA 报告入库 `docs/`，CSP 描述按实测修正 | `8d91b31` |
 | 2026-10-24 | 安全/稳定性加固：runner 租约自愈（修复任务可能静默永久停跑）、登录恒定时间比对 + 同 IP 限流（429）、Cookie 条件 Secure + 退出登录全局吊销、任务输入严格校验、连续失败告警、单测 10 → 72、CI、MIT LICENSE、`db:export` 备份脚本 | `8475647` |
 | 2026-09-28 | 初版上线（M0–M6）：Cloudflare Worker + Hono + GramJS + D1 + Web 管理界面 + 每分钟定时签到 | `e8f8c6c`、`bd9cdc1` |
 
