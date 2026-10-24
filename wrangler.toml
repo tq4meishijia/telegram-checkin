@@ -11,8 +11,9 @@ crons = ["* * * * *"]
 [assets]
 directory = "./public"
 binding = "ASSETS"
-# 所有请求先打到 Worker：/api/* 由 Hono 处理，其余走 catch-all 回退到 ASSETS
-# （这样静态响应才能统一附加 CSP 等安全响应头）
+# 页面路径先打到 Worker：/api/* 由 Hono 处理，其余走 catch-all 回退到 ASSETS 并附加 CSP 头。
+# 注：dev 实测 JS/CSS 由 assets 层直接服务、不经过 Worker 故不带头；CSP 为文档级策略，
+# HTML 带头即生效（详见 AGENT_HANDOFF §5）。
 run_worker_first = ["/"]
 
 # Workers 日志（Tail Workers 之外的内置可观测），排障时在面板 Logs 查看

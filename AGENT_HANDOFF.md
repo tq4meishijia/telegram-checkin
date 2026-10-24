@@ -15,6 +15,7 @@
   > ⚠️ **部署加固版代码前必须先** `npm run db:migrate:remote`（0002 迁移新增 `login_attempts` 表和 `tasks.fail_streak` 列，新版代码依赖它们）。
 - **线上现有数据**：1 个任务「每日签到」（目标 `me`、指令 `/checkin`、daily 08:00 Asia/Shanghai）；有成功/失败日志若干。
 - **代码健康度**：`npx tsc --noEmit` 无错误；vitest **72/72** 通过（5 个测试文件）；包体 gzip 约 333 KiB（远低于 3MB 上限）。
+- **QA 验证（2026-10-24）**：全量测试 **IS_PASS: YES**——单测 72/72、typecheck 0 错误、fake D1 集成 17/17、wrangler dev 冒烟 7/7、对抗探测 8/8；报告 `docs/qa-report-2026-10-24.md`。遗留 2 个低危项（N1 静态资源 CSP dev 行为偏差、N2 偶发 flaky），见 §15 待办。
 - **代码仓库**：https://github.com/tq4meishijia/cf-tg-checkin （**公开**仓库，MIT LICENSE）。
 - **CI**：`.github/workflows/ci.yml`，push/PR 自动跑 `npm ci` + typecheck + test。
 
@@ -80,6 +81,9 @@ tg-checkin-serverless/
 ├── AGENT_TASK.md            # 里程碑任务书
 ├── README.md                # 人类用户简版说明
 ├── AGENT_HANDOFF.md         # ← 本文档
+├── docs/                    # 过程文档（命名 kebab-case-YYYY-MM-DD.md，随提交进仓库）
+│   ├── architecture-analysis-2026-10-24.md   # 全量代码评审报告（加固依据）
+│   └── qa-report-2026-10-24.md               # 加固后全量测试报告（IS_PASS: YES）
 ├── _run.bat                 # Windows 下带代理环境执行任意命令的辅助脚本（路径相对自身目录）
 ├── migrations/
 │   ├── 0001_init.sql        # 三张表 DDL（settings/tasks/run_logs）
@@ -199,7 +203,7 @@ tg-checkin-serverless/
 - 密码比对：SHA-256 双摘要 + 恒定时间比较（无计时侧信道）。
 - 登录限流：同 IP 60 秒 5 次失败 → 429（D1 `login_attempts` 表）。
 - CSRF：所有跨站 Origin 的 POST/PUT/PATCH/DELETE → 403 `origin_mismatch`（SameSite=Lax 之外的纵深）。
-- CSP：静态响应统一带 `Content-Security-Policy`（script-src 'self'；前端已无内联脚本/事件处理器）。
+- CSP：**HTML 文档响应**带 `Content-Security-Policy`（script-src 'self'；前端已无内联脚本/事件处理器）。注：dev 实测 JS/CSS 由 assets 层直接服务、不经过 Worker 故不带头（QA 报告 N1）——CSP 是文档级策略，HTML 带头即生效，无实际防护影响；线上 `run_worker_first` 前缀匹配行为未验证。
 
 **任务字段（POST/PATCH body）**：`name, bot_username, command, schedule_type, schedule_value, timezone, jitter_minutes, capture_reply, reply_wait_sec, enabled`。
 
@@ -332,7 +336,7 @@ npx wrangler deploy
 
 `wrangler.toml` 关键点：
 - `compatibility_flags=["nodejs_compat"]`（GramJS 需要 Buffer / node:net）。
-- `[assets]` 用 **`run_worker_first=["/"]`**：所有请求先进 Worker，`/api/*` 由 Hono 处理，其余走 catch-all 回退 ASSETS（这样静态响应才能统一附加 CSP 头）。
+- `[assets]` 用 **`run_worker_first=["/"]`**：页面路径先打到 Worker，`/api/*` 由 Hono 处理，其余走 catch-all 回退 ASSETS 并附加 CSP 头（dev 实测：JS/CSS 由 assets 层直接服务不带头，见 §5 安全机制注）。
 - `src/index.ts` 末尾 catch-all `app.get("*", c => c.env.ASSETS.fetch(c.req.raw))` 必须放在所有 /api 路由之后。
 
 线上 cron **不能**手动触发，要等真实整分钟（可能有几十秒抖动）。
@@ -359,7 +363,8 @@ npx wrangler deploy
 4. 本地 `npm run dev` 实测受影响路径（含 `curl /cdn-cgi/local/scheduled`）。
 5. `npm run deploy`（先确认远程迁移已 apply）。
 6. `bsk reload --hard` 浏览器复验，观察真实数据。
-7. 汇报：做了什么、验证证据（真实输出）、与计划不一致之处。
+7. **按 §14 红线 #9 同步更新 `AGENT_HANDOFF.md` + `README.md`**（任务完成且验证通过后、汇报前）。
+8. 汇报：做了什么、验证证据（真实输出）、与计划不一致之处。
 
 ---
 
@@ -377,7 +382,7 @@ npx wrangler deploy
 7. **抓回复要同时过滤 `m.out` 和 `id <= 本次发送 id`**，否则机器人本次没回复时会抓到历史旧消息。
 8. **vitest 默认 forks 进程池在部分 Windows 环境加载即崩**（Node 22/24 均复现，与项目代码无关）→ `vitest.config.ts` 已固定 `pool: "vmForks"`；换机器/CI 若遇 `npm test` 假失败，先试这个。
 9. **沙箱/代理环境里 curl 打本地 dev 端口可能被环境代理拦截**（换端口如 8788 会被代理层吞掉）→ 用项目默认 8787，并加 `--noproxy '*'`。
-10. **`run_worker_first=["/api/*"]` 时静态资源不经过 Worker**，响应头加不上 CSP → 已改为 `["/"]`，所有请求先进 Worker 再由 catch-all 回退 ASSETS。
+10. **`run_worker_first=["/api/*"]` 时页面不经过 Worker**，响应头加不上 CSP → 已改为 `["/"]`（页面经 catch-all 带头；但 dev 实测 JS/CSS 仍由 assets 层直接服务不带头，见 QA 报告 N1——CSP 是文档级策略，HTML 带头即生效）。
 
 ---
 
@@ -392,6 +397,10 @@ npx wrangler deploy
 6. GramJS API 签名不确定时读 `node_modules/telegram` 的 `.d.ts`，禁止凭记忆编造。
 7. 全程中文回复；测试消息默认只发 `me`，不要碰用户真实大号。
 8. **抢占必须用租约值（now+1h）不用 NULL**；**先 apply 远程迁移再 deploy**。
+9. **文档同步纪律（2026-10-24 立规）**：每完成一项任务（功能/修复/配置变更/测试/文档整理）后，**立即**同步更新 `AGENT_HANDOFF.md` 与 `README.md`，两份文档内容必须一致、与现实一致。
+   - **更新时机**：任务完成且验证通过后、向用户汇报前；docs/ 下的过程文档（评审/QA 报告）随当次提交进仓库。
+   - **内容要求**：HANDOFF 记当前任务状态、已完成事项、未解决问题、下一步计划、关键决策、相关文件位置（§0 现状 + 受影响章节 + §17/§18 变更记录）；README 反映最新项目结构、功能说明、使用方式、配置要求、已知限制、变更记录。禁止描述未经实测验证的行为。
+   - **维护责任**：当次任务的执行者（Agent 或人）负责更新；主理人/交付负责人在验收时核对两份文档已同步——**文档未同步视为任务未完成**。
 
 ---
 
@@ -405,6 +414,13 @@ npx wrangler deploy
 5. 运维观察：真实 cron 24h 运行留档、Cloudflare 面板确认无 `exceededCpu`。
 6. **D1 定期备份**：`npm run db:export` 已就绪，建议接一个定时提醒/自动化。
 7. **迁移到 teleproto**：仅当 `telegram` 出现安全问题或必须缺失特性时启动（见 §14 注）。
+
+**当前最高优先（用户侧操作，做前确认）**：
+8. **部署加固版到线上**：`npm run db:migrate:remote`（应用 0002）→ `npm run deploy` → 面板 Logs/Metrics 观察一轮。顺序不可反（见 §10）。
+9. **N2 flaky 处置**（QA 报告）：CI 加 `vitest run --retry 1`，或将 capture_reply 时序敏感用例改 fake timers。待用户确认是否现在做。
+10. **N1 收尾**（QA 报告）：wrangler.toml 注释已改为准确描述（仅 HTML 带头）；若要求 JS/CSS 也带头，需 `run_worker_first` 扩为 `["/", "/app.js", "/style.css"]` 并回归。待用户确认。
+11. **`.gitignore` 的 `.ddev/` 疑似笔误**（全仓库无工具生成该目录）：待确认后删除该行或修正为 `.dev/`。
+12. **`compatibility_date` 上调**：需 wrangler dev 完整回归（登录/cron/GramJS 连接）后单独处理，不做常规维护动作。
 
 ---
 
@@ -447,3 +463,21 @@ npx wrangler deploy
 **验证证据**：`tsc --noEmit` 0 错误；`vitest run` 72/72；`wrangler d1 migrations apply --local` 两个迁移均成功（表/列已核实）；`wrangler dev` 冒烟：health 200、登录 401/限流路径正常、静态资源 200 且带 CSP、`/cdn-cgi/local/scheduled` 200。
 
 **遗留/待用户侧**：远程库需先 apply 0002 再部署新版；`compatibility_date` 未上调（需完整回归后单独处理）；Cloudflare Access 叠加方案未实施（基础设施决策）。
+
+---
+
+## 18. 2026-10-24 测试验证与文档同步迭代
+
+### 18.1 QA 全量验证（结论 IS_PASS: YES）
+
+- **范围**：单测全量 + 类型检查 + fake D1 集成 + 原 10 例回归 + wrangler dev 冒烟（7 项）+ 对抗性探测（8 项）。
+- **结果**：单测 72/72（8 次完整运行 7 次全绿，1 次偶发 1 例 flaky，记为 N2）；tsc 0 错误；api 集成 17/17；schedule 回归 10/10 全绿；冒烟 7/7（health 200 / 错密 401 / 同 IP 第 6 次错密 429 / `/` 带 CSP / app.js+style.css 200 / scheduled 触发后 health 200 / 无 Cookie 401）；对抗 8/8（T1 故障注入复测、租约自愈、限流按 IP 隔离、epoch 吊销、limit 四边界收敛、手动运行修 NULL、畸形 JSON 400 非 500、grep 证实无 session/密钥泄露路径）。
+- **行为变更确认**：「手动运行」语义从"不占位不重排"改为"占位防并发 + 未到点恢复原排期 + 已到点消耗 slot + 修 NULL"，为加固有意为之，已用 3 个单测固化，不算回归失败。
+- **完整报告**：`docs/qa-report-2026-10-24.md`（含失败排查方向、风险与遗留）。
+- **测试无法证明的部分**：真实登录成功链路与真实 GramJS 会话仅 mock 单测覆盖；远程 0002 迁移未应用；线上 cron 与 run_worker_first 真实行为未经线上验证。
+
+### 18.2 文档同步（按 §14 红线 #9 执行）
+
+- HANDOFF/README 已同步至当前状态；QA 报告提交进仓库 `docs/`。
+- CSP 描述按 dev 实测修正：HANDOFF §5/§10/§13、`wrangler.toml` 注释、README 架构段（原文案"静态响应统一带 CSP"不准确，实际仅 HTML 文档响应带头）。
+- 提交记录见 `git log`（docs: 同步 HANDOFF/README + QA 报告入库）。
