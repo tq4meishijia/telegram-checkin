@@ -73,8 +73,8 @@ npm run verify
 
 ```bash
 npx wrangler login
-# 首次：npx wrangler d1 create tg-checkin-db，把 database_id 填回 wrangler.toml
-npx wrangler d1 migrations apply tg-checkin-db --remote   # 必须先迁移
+# 首次：npx wrangler d1 create telegram-checkin-db，把 database_id 填回 wrangler.toml
+npx wrangler d1 migrations apply telegram-checkin-db --remote   # 必须先迁移
 npx wrangler secret put TG_API_ID
 npx wrangler secret put TG_API_HASH
 npx wrangler secret put ADMIN_PASSWORD
@@ -88,7 +88,7 @@ npm run deploy
 ## 备份
 
 ```bash
-npm run db:export   # 导出到 backups/tg-checkin-db.sql（gitignored，请自行归档）
+npm run db:export   # 导出到 backups/telegram-checkin-db.sql（gitignored，请自行归档）
 ```
 
 免费版 D1 无自动备份，建议定期执行并归档到仓库外。

@@ -1,6 +1,6 @@
 # AGENT_HANDOFF · 接手开发文档（面向 AI Agent）
 
-> 项目：**Telegram 自动签到工具（tg-checkin）**
+> 项目：**Telegram 自动签到工具（telegram-checkin）**
 > 用途：以**用户态账号（userbot）**定时向指定 Telegram 机器人发送指令（如 `/checkin`），自带 Web 管理界面。
 > 本文档是给**下一位接手开发的 Agent** 的完整交接材料，读完即可独立改代码、调试、部署。
 > 配套阅读：`PLAN.md`（原始设计方案，权威设计来源）、`AGENT_TASK.md`（里程碑任务书）、`README.md`（面向人类用户的简版说明）。
@@ -10,7 +10,7 @@
 ## 0. 一分钟现状（2026-10-24 加固迭代后）
 
 - **进度**：M0–M6 全部完成并上线；2026-10-24 完成一轮安全/稳定性加固（变更清单见 §17），M7 剩余项未开始。
-- **线上地址**：https://tg-checkin.tq4meishijia.workers.dev
+- **线上地址**：https://telegram-checkin.tq4meishijia.workers.dev （2026-10-24 重命名后的新地址；旧地址 tg-checkin.… 随 Worker 名变更已失效）
 - **线上状态**：⚠️ **2026-10-24 实测：线上已不可用**——`https://tg-checkin.tq4meishijia.workers.dev` 返回 Cloudflare 错误 1042；当前登录账号（`3312884334@qq.com's Account`）下 **Worker `tg-checkin` 不存在**（API 错误 10007）、**wrangler.toml 引用的 D1 `tg-checkin-db`（5965162f-0f03-4f75-875f-7e3724cb7e2a）不存在**（错误 7404）；该账号下只有一个 2026-09-28 创建的**空库** `cf-tg-checkin-db`（ba149de2-29b6-4d7c-b3db-355862a7c44d，0 张表）。原交接文档所称"已上线"与当前实测不符，疑似原资源建于**其他 Cloudflare 账号**或已被删除。**上线流程已中止，待用户确认账号归属**（见 §15-8）。
 - **线上现有数据**：1 个任务「每日签到」（目标 `me`、指令 `/checkin`、daily 08:00 Asia/Shanghai）；有成功/失败日志若干。
 - **代码健康度**：`npx tsc --noEmit` 无错误；vitest **72/72** 通过（5 个测试文件）；包体 gzip 约 333 KiB（远低于 3MB 上限）。
@@ -65,7 +65,7 @@
 ## 3. 目录结构与文件职责
 
 ```
-tg-checkin-serverless/
+telegram-checkin/
 ├── wrangler.toml            # Worker 配置：nodejs_compat、D1 绑定、cron、静态 assets、observability
 ├── package.json             # 依赖与脚本（npm）
 ├── package-lock.json
@@ -326,8 +326,8 @@ npm test
 
 ```bash
 npx wrangler login                                   # 浏览器 OAuth
-npx wrangler d1 create tg-checkin-db                 # database_id 填回 wrangler.toml
-npx wrangler d1 migrations apply tg-checkin-db --remote   # 必须先迁移（含 0002），再 deploy
+npx wrangler d1 create telegram-checkin-db                 # database_id 填回 wrangler.toml
+npx wrangler d1 migrations apply telegram-checkin-db --remote   # 必须先迁移（含 0002），再 deploy
 npx wrangler secret put TG_API_ID
 npx wrangler secret put TG_API_HASH
 npx wrangler secret put ADMIN_PASSWORD
@@ -416,7 +416,7 @@ npx wrangler deploy
 7. **迁移到 teleproto**：仅当 `telegram` 出现安全问题或必须缺失特性时启动（见 §14 注）。
 
 **当前最高优先（用户侧操作，做前确认）**：
-8. **上线（当前受阻，待用户决策）**：2026-10-24 首次执行 `db:migrate:remote` 即失败——当前账号下无 `tg-checkin-db`（7404）、无 Worker（10007），线上 URL 已 1042。需用户确认：**(a)** 原资源是否在另一个 Cloudflare 账号（重新 `wrangler login` 选对账号后按原顺序 migrate → deploy）；**(b)** 若原资源已丢失，则走全新部署：修正 wrangler.toml 的 database_id（或新建库）→ migrate → **用户提供 3 个 secrets（TG_API_ID/TG_API_HASH/ADMIN_PASSWORD，本地无 .dev.vars）** → deploy → **用户重新跑 scripts/login.mjs 拿新 StringSession**（旧 session 随旧库丢失）。
+8. **上线（当前受阻，待用户决策）**：2026-10-24 首次执行 `db:migrate:remote` 即失败——当前账号下无 `tg-checkin-db`（7404）、无 Worker（10007），线上 URL 已 1042。需用户确认：**(a)** 原资源是否在另一个 Cloudflare 账号（重新 `wrangler login` 选对账号后按原顺序 migrate → deploy）；**(b)** 若原资源已丢失，则走全新部署：`npx wrangler d1 create telegram-checkin-db` 并把新 database_id 填回 wrangler.toml（旧 id 5965162f 已失效）→ migrate → **用户提供 3 个 secrets（TG_API_ID/TG_API_HASH/ADMIN_PASSWORD，本地无 .dev.vars）** → deploy（新地址 telegram-checkin.tq4meishijia.workers.dev）→ **用户重新跑 scripts/login.mjs 拿新 StringSession**（旧 session 随旧库丢失）。
 9. ~~**N2 flaky 处置**~~：✅ 2026-10-24 已根因修复——capture_reply 用例改 fake timers（消除唯一真实计时依赖），未加 `--retry`（保持 CI 严格）；连续 8 轮全量测试 8/8 全绿（修复前复现率约 12%）。
 10. ~~**N1 收尾**~~：✅ 2026-10-24 已闭环——`run_worker_first` 扩为 `["/", "/app.js", "/style.css"]`，dev 实测三类路径均带 CSP 头（`/` HTML、`/app.js` JS、`/style.css` CSS，content-type 均正常）；其余端点回归无破（health/scheduled/404/401 正常）。
 11. ~~**`.gitignore` 的 `.ddev/` 疑似笔误**~~：✅ 2026-10-24 已删除。研究结论：`.ddev/` 是 DDEV（Docker 版 PHP 本地开发工具的配置目录），本仓库 Node/Cloudflare 技术栈零依赖，属误入行。

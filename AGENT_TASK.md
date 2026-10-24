@@ -47,7 +47,7 @@
 ## 2. 项目初始化（你可以先手动做，也可以让模型做 M0）
 
 ```bash
-mkdir tg-checkin-worker && cd tg-checkin-worker
+mkdir telegram-checkin-worker && cd telegram-checkin-worker
 git init
 # 把 PLAN.md 复制进项目根目录
 ```
@@ -72,7 +72,7 @@ ADMIN_PASSWORD=你的管理密码
 执行 PLAN.md 的 M0 里程碑：初始化项目骨架。要求：
 
 1. npm init，安装并锁定：hono ^4、telegram ^2.26.x；devDependencies：wrangler ^4、typescript、@cloudflare/workers-types、vitest
-2. wrangler.toml 按 PLAN.md 第 7 节结构写：name="tg-checkin"、main="src/index.ts"、compatibility_date 用今天的、compatibility_flags=["nodejs_compat"]、D1 绑定 DB（database_name="tg-checkin-db"，database_id 先留 "TODO" 占位并注释提醒）、[triggers] crons=["* * * * *"]、[assets] directory="./public" binding="ASSETS"
+2. wrangler.toml 按 PLAN.md 第 7 节结构写：name="telegram-checkin"、main="src/index.ts"、compatibility_date 用今天的、compatibility_flags=["nodejs_compat"]、D1 绑定 DB（database_name="telegram-checkin-db"，database_id 先留 "TODO" 占位并注释提醒）、[triggers] crons=["* * * * *"]、[assets] directory="./public" binding="ASSETS"
 3. tsconfig.json：面向 workers 的标准配置（types 引 @cloudflare/workers-types，moduleResolution "bundler"，strict）
 4. src/index.ts：Hono app，GET /api/health 返回 {ok:true}；export default 同时带 fetch 和 scheduled 两个入口（scheduled 先只 console.log）
 5. migrations/0001_init.sql：原样使用 PLAN.md 第 4 节的三张表 DDL
@@ -85,9 +85,9 @@ ADMIN_PASSWORD=你的管理密码
 
 **验收清单（你来核对）**
 - [ ] `npm run dev` 启动后 `curl http://localhost:8787/api/health` 返回 `{"ok":true}`
-- [ ] `npx wrangler d1 create tg-checkin-db` 成功，database_id 已填回 wrangler.toml
-- [ ] `npx wrangler d1 migrations apply tg-checkin-db --local` 成功
-- [ ] `npx wrangler d1 execute tg-checkin-db --local --command "SELECT name FROM sqlite_master WHERE type='table'"` 能看到 settings/tasks/run_logs
+- [ ] `npx wrangler d1 create telegram-checkin-db` 成功，database_id 已填回 wrangler.toml
+- [ ] `npx wrangler d1 migrations apply telegram-checkin-db --local` 成功
+- [ ] `npx wrangler d1 execute telegram-checkin-db --local --command "SELECT name FROM sqlite_master WHERE type='table'"` 能看到 settings/tasks/run_logs
 
 ---
 
@@ -121,7 +121,7 @@ ADMIN_PASSWORD=你的管理密码
 
 **验收清单（你来核对，需要真机 Telegram 配合）**
 - [ ] `node scripts/login.mjs` 交互登录小号成功（收验证码、输二步验证密码），终端输出 `SESSION=1...` 开头的长字符串
-- [ ] 把 session 写入本地 D1：`npx wrangler d1 execute tg-checkin-db --local --command "INSERT INTO settings(key,value) VALUES('tg_session','粘贴的SESSION串')"`
+- [ ] 把 session 写入本地 D1：`npx wrangler d1 execute telegram-checkin-db --local --command "INSERT INTO settings(key,value) VALUES('tg_session','粘贴的SESSION串')"`
 - [ ] `curl -X POST http://localhost:8787/api/spike-send -H 'content-type: application/json' -d '{"to":"me","text":"spike 测试"}'` 返回 ok，且**小号 Telegram 的"收藏夹/Saved Messages"里真的出现这条消息**
 - [ ] `npx wrangler deploy --dry-run` 显示压缩后体积 < 3MB
 - [ ] dev 日志里没有 CPU time exceeded 报错

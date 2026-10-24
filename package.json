@@ -1,15 +1,15 @@
 {
-  "name": "tg-checkin-worker",
+  "name": "telegram-checkin-worker",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "db:create": "wrangler d1 create tg-checkin-db",
-    "db:migrate:local": "wrangler d1 migrations apply tg-checkin-db --local",
-    "db:migrate:remote": "wrangler d1 migrations apply tg-checkin-db --remote",
-    "db:export": "wrangler d1 export tg-checkin-db --output=./backups/tg-checkin-db.sql",
+    "db:create": "wrangler d1 create telegram-checkin-db",
+    "db:migrate:local": "wrangler d1 migrations apply telegram-checkin-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply telegram-checkin-db --remote",
+    "db:export": "wrangler d1 export telegram-checkin-db --output=./backups/telegram-checkin-db.sql",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "verify": "npm run typecheck && npm test"
