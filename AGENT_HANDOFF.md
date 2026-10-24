@@ -15,7 +15,7 @@
 - **线上现有数据**：1 个任务「每日签到」（目标 `me`、指令 `/checkin`、daily 08:00 Asia/Shanghai）；有成功/失败日志若干。
 - **代码健康度**：`npx tsc --noEmit` 无错误；vitest **72/72** 通过（5 个测试文件）；包体 gzip 约 333 KiB（远低于 3MB 上限）。
 - **QA 验证（2026-10-24）**：全量测试 **IS_PASS: YES**——单测 72/72、typecheck 0 错误、fake D1 集成 17/17、wrangler dev 冒烟 7/7、对抗探测 8/8；报告 `docs/qa-report-2026-10-24.md`。遗留 2 个低危项（N1 静态资源 CSP dev 行为偏差、N2 偶发 flaky），见 §15 待办。
-- **代码仓库**：https://github.com/tq4meishijia/cf-tg-checkin （**公开**仓库，MIT LICENSE）。
+- **代码仓库**：https://github.com/tq4meishijia/telegram-checkin （**公开**仓库，MIT LICENSE；2026-10-24 由 `cf-tg-checkin` 重命名而来，旧地址自动重定向）。
 - **CI**：`.github/workflows/ci.yml`，push/PR 自动跑 `npm ci` + typecheck + test。
 - **wrangler 登录态（2026-10-24）**：已 OAuth 登录（`tq4meishijia@gmail.com`，账号 `3312884334@qq.com's Account`），**写权限 scopes 已补齐**（workers/workers_scripts/d1 等 write，当日二次授权确认）——远程迁移与部署已无权限障碍，只差用户下令执行。
 
