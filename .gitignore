@@ -10,3 +10,4 @@ backups/
 .dbg*.png
 .login_*.log
 .tg_code.txt
+.verify/

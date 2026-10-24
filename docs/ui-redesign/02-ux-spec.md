@@ -123,7 +123,7 @@ body.is-auth .content { display: flex; align-items: center; justify-content: cen
 
 通用约定：
 - 每页根元素 = `<div class="stack">`（`display:flex; flex-direction:column; gap: var(--gap-lg)`），内部按「notice → KPI 行 → 面板网格 → 全宽面板」顺序堆叠；禁止手写 margin 微调。
-- 面板网格 `.grid.grid--panels`（3 列）+ `.col-2`（span 2）；卡片网格 `.grid.grid--cards`（2 列）；KPI 行 `.grid.grid--kpi`（4 列）。全部 <1024px 塌陷为 1 列（`.col-*` 复位 `grid-column:auto`），`.grid--cards` <768px 塌 1 列。
+- 面板网格 `.grid.grid--panels`（3 列）+ `.col-2`（span 2）；卡片网格 `.grid.grid--cards`（2 列）；KPI 行 `.kpi-grid`（4 列）。全部 <1024px 塌陷为 1 列（`.col-*` 复位 `grid-column:auto`），`.grid--cards` <768px 塌 1 列。
 - 面板标题 `.panel__title` 用 `<h2>`（P1 §3：≥768px 自动升 H2 档），面板用 `<section aria-labelledby="...">`；顶栏 `.topbar__title` 是全页唯一 `<h1>`（登录页除外，见 §3.6）。
 - 页面级错误态统一：`.empty`（⚠️ + 「加载失败」+ `esc(消息)` + 「刷新页面重试」），替换现状 `<p class="empty">加载失败: ...</p>`。
 
@@ -134,7 +134,7 @@ body.is-auth .content { display: flex; align-items: center; justify-content: cen
 ```
 ┌─ .stack ────────────────────────────────────────────────┐
 │ [notice warn] 仅 sessionConfigured=false：⚠️ 尚未配置可用账户… │
-│ .grid--kpi：┌今日成功┐┌今日失败┐┌签到任务┐┌Telegram账户┐   │
+│ .kpi-grid：┌今日成功┐┌今日失败┐┌签到任务┐┌Telegram账户┐   │
 │ .grid--panels：┌─ 今日执行 (col-2) ──┐┌ 默认账户 (col-1) ┐ │
 │               │ stat-row: 成功/失败/跳过 ││ 徽章+名称(@u)  │ │
 │ .grid--panels：┌快捷操作┐┌告警说明┐┌密码┐                  │
@@ -230,7 +230,7 @@ body.is-auth .content { display: flex; align-items: center; justify-content: cen
 |---|---|
 | 侧边栏 | 常驻 256px（sticky，`height:100vh`），汉堡隐藏，backdrop 不存在交互 |
 | 顶栏 | 标题 H1 24px；搜索 240px；铃铛；头像+「管理员」 |
-| KPI 行 | `.grid--kpi` 4 列 |
+| KPI 行 | `.kpi-grid` 4 列 |
 | 面板网格 | `.grid--panels` 3 列（col-2 + col-1） |
 | 卡片网格 | `.grid--cards` 2 列（任务/账户卡） |
 | 日志/即将执行 | 全宽面板 |
@@ -315,7 +315,7 @@ body.is-auth .content { display: flex; align-items: center; justify-content: cen
 ```js
 el.innerHTML = `
   <div class="stack" aria-busy="true">
-    <div class="grid grid--kpi">
+    <div class="kpi-grid">
       <div class="panel kpi-skeleton"><div class="skeleton skeleton--text" style="width:40%"></div><div class="skeleton skeleton--kpi"></div></div>
       …×4…
     </div>
@@ -463,7 +463,7 @@ matchMedia("(min-width: 768px)").addEventListener("change", (e) => { if (e.match
 ### 8.4 `updateNav()` 改写（选择器 + 标题 + is-auth + 搜索可见性）
 
 ```js
-const ROUTE_TITLES = { "#/": "仪表盘", "#/tasks": "任务", "#/accounts": "账户", "#/logs": "日志", "#/settings": "设置", "#/login": "登录" };
+const ROUTE_TITLES = { "#/": "仪表盘", "#/tasks": "签到任务", "#/accounts": "Telegram 账户", "#/logs": "执行日志", "#/settings": "设置", "#/login": "登录" };
 
 function updateNav() {
   const hash = location.hash || "#/";
@@ -481,7 +481,7 @@ function updateNav() {
 ```
 
 - 旧选择器 `nav a.nav-link` / `.active` 类全部替换为 `.sidebar__link` / `.is-active`（裁决 C6）。
-- `ROUTE_TITLES` 为路由→标题映射表；未知路由回落「仪表盘」。登录态顶栏隐藏，标题文本不影响视觉。
+- `ROUTE_TITLES` 为路由→标题映射表；标题长名与侧栏导航枚举一致（「签到任务 / Telegram 账户 / 执行日志」，team-lead 口径，as-built 已采用）；未知路由回落「仪表盘」。登录态顶栏隐藏，标题文本不影响视觉。
 
 ---
 
@@ -531,6 +531,7 @@ function applySearch(q) {
 - 日志「加载更多」追加后：补一行 `applySearch(document.getElementById("topbar-search").value.trim().toLowerCase());`
 - 依赖的模板改动（仅加类名/容器，不动 id 与 data-action）：仪表盘「即将执行」面板加 `panel--upcoming`；任务/账户页卡片网格容器统一为 `.grid--cards`；CSS 加 `.is-filtered { display:none !important; }`。
 - 注意 `esc()` 用于 `q` 插入 HTML；`textContent` 路径天然安全。CSP 兼容（`addEventListener`，无内联属性）。
+- **as-built 修正（Phase 3 commit b6634f1，体验语义不变）**：落地方案为列表项渲染时预计算可搜索文本写入 `data-search` 属性（同样经 `esc()`），过滤时按属性值匹配并切换 `.is-hidden`（而非本节的 children 动态选择器方案）——规避与日志「加载更多」append 的冲突；无结果提示仍为容器末插 `data-filter-empty`。匹配范围、隐藏规则、清空规则均与本节一致；Phase 4 文档同步以 as-built 为准。
 
 ### 8.6 交互态 JS 增量（三处，均 ≤6 行）
 
@@ -546,7 +547,7 @@ function applySearch(q) {
 | `.sidebar .sidebar__brand .sidebar__nav .sidebar__link(.is-active) .sidebar__ico .sidebar__user .sidebar__user-meta .sidebar__user-name .sidebar__user-sub` | 侧栏（两模式深色签名） |
 | `.sidebar-backdrop` / `body.drawer-open` / `body.is-auth` | 抽屉与登录态开关 |
 | `.topbar .topbar__toggle .topbar__title .topbar__right .topbar__search .topbar__user .topbar__user-name .icon-btn` | 顶栏 |
-| `.grid .grid--kpi .grid--panels .grid--cards .col-2` | 栅格（4/3/2 列 → 1 列塌陷） |
+| `.grid .kpi-grid .grid--panels .grid--cards .col-2` | 栅格（4/3/2 列 → 1 列塌陷） |
 | `.kpi .kpi__label .kpi__value` | KPI 卡（仅仪表盘行） |
 | `.panel .panel__head .panel__title .panel__sub .panel__body .panel__foot .panel__dashed .panel--flat .panel--upcoming .panel--wide` | 面板家族 |
 | `.stat .stat__num .stat__label .stat--ok .stat--bad .stat--neutral .stat-row` | 面板内嵌数值（**保留旧类名**，裁决 C2） |
@@ -561,7 +562,7 @@ function applySearch(q) {
 
 - app.js：6 路由字符串；`data-action` 全部取值；全部元素 id（`app`/`app-root`/`am-*`/`login-*`/`tf-*`/`pw-*`/`log-*`/`modal-*`）；`class="field__error" id="am-err"` ≥4；`function stepsHtml`；`function tzOptions(selected)` 及 `SCHEDULE_TZS.includes(selected) ? SCHEDULE_TZS : [selected, ...SCHEDULE_TZS]`；登录页提示文案逐字；`render*` 先 `api()` 探针后渲染（**占位必须含字面「加载中」**，§6.2）；`AUTH_401` 逻辑；`esc()` >20 处；函数名清单（`renderLogin`…`doLogout`/`esc`/`toast`/`parseDate`/`fmtTime`/`relTime`/`scheduleDesc`/`statusBadge`/`tzOptions`/`taskCard`/`accountCard`/`logRow`/`passwordScore`/`api`/`loginErr`/`navigate`/`updateNav`）。
 - style.css：`.btn:focus-visible`、`.switch input:focus-visible`、`@media (prefers-color-scheme: dark)`、`@media (prefers-reduced-motion: reduce)` 四条断言必须原样保留。
-- **`tests/frontend.test.ts` 的 CSS 风格断言块（`.bento`/`.col-2 span 2`/`--radius:16px`/`.card--lift`/`scale(0.95)`/`max-width:900px`/`repeat(4,1fr)` 等）需在 Phase 4 随新规范更新**——详见 §9-C1，Phase 3 不要为迁就旧断言而退回旧类名。
+- **`tests/frontend.test.ts` 的 CSS 风格断言块（`.bento`/`.col-2 span 2`/`--radius:16px`/`.card--lift`/`scale(0.95)`/`max-width:900px`/`repeat(4,1fr)` 等）已于 Phase 3 同步更新**（「Dashboard Layout 风格契约」11 条 + 抽屉/断点断言，随 commit b6634f1 落地并通过）——详见 §9-C1；功能锚点块零改动，Phase 4 复核确认即可。
 
 ---
 
@@ -569,7 +570,7 @@ function applySearch(q) {
 
 | # | 冲突点 | 裁决 | 理由 / 后续 |
 |---|---|---|---|
-| C1 | `tests/frontend.test.ts` 的 CSS 风格断言（`.bento{display:grid}`、`.col-2{grid-column:span 2}`、`.row-2`、`--radius:16px`、`.card--lift:hover translateY(-2px)`、`.card__icon scale(1.1)`、`.btn:active scale(0.95)`、`@media (max-width:900px/640px)`、`repeat(4\|2\|1, minmax(0,1fr))`）与 P1 新类名/新值（`.grid`/`.kpi`/`.panel`、`--radius-card:12px`、`scale(0.97)`、min-width 断点 768/1024）不兼容 | **以 P1 为准**：team-lead 枚举的功能锚点（路由、data-action、id、函数、esc、探针、AUTH_401、登录文案）逐条保留；上述 CSS 断言属「旧风格的样式测试」，**Phase 4 集成验证时更新测试**（改写为断言新类名/新值/新断点），不得为迁就测试退回旧设计 | 测试是工具不是需求；旧断言锁定的正是本次要替换的视觉。Phase 3 交付时 `vitest` 风格块可能红，属预期，Phase 4 一并处理 |
+| C1 | `tests/frontend.test.ts` 的 CSS 风格断言（`.bento{display:grid}`、`.col-2{grid-column:span 2}`、`.row-2`、`--radius:16px`、`.card--lift:hover translateY(-2px)`、`.card__icon scale(1.1)`、`.btn:active scale(0.95)`、`@media (max-width:900px/640px)`、`repeat(4\|2\|1, minmax(0,1fr))`）与 P1 新类名/新值（`.grid`/`.kpi`/`.panel`、`--radius-card:12px`、`scale(0.97)`、min-width 断点 768/1024）不兼容 | **以 P1 为准**：team-lead 枚举的功能锚点（路由、data-action、id、函数、esc、探针、AUTH_401、登录文案）逐条保留；上述 CSS 断言属「旧风格的样式测试」，**已于 Phase 3 同步更新**（改写为断言新类名/新值/新断点：「Dashboard Layout 风格契约」11 条 + 抽屉/断点断言，随 commit b6634f1 落地并通过），不为迁就测试退回旧设计 | 测试是工具不是需求；旧断言锁定的正是本次要替换的视觉；Phase 4 复核时确认测试绿即可，无需再改 |
 | C2 | P1 §8 建议把 `.stat/.stat__num/.stat__label` 并入 `.kpi__*` | **保留 `.stat` 家族**用于面板内嵌数值（仪表盘「今日执行」、任务/账户/日志计数面板），`.kpi` 专用于仪表盘 KPI 行；`.stat` 样式按新 token 重绘（`--fs-h2`/600/tabular-nums） | 一致性优先：`.stat` 在 4 个 render 函数的头部面板与主面板中复用，合并改名徒增触点且两处视觉规格不同（36px vs 20px） |
 | C3 | KPI 行 1 列断点：P1 §6.3 为 <640px，team-lead 档位定义为 <768px | **<768px 塌 1 列** | 档位边界统一（三档 1024/768），减少心智负担；641–767px 区间 1 列 KPI 可接受 |
 | C4 | 顶栏搜索：P1 §6.2-R8 留待裁决 | **实现为当前页客户端过滤**（§2.1），settings/login 隐藏，<768px 隐藏 | 风格签名要求顶栏有搜索；客户端过滤零接口风险；不可用时整槽隐藏，不留假控件 |
@@ -598,7 +599,7 @@ function applySearch(q) {
 
 - **给 visual-architect**：本文对 P1 的增量仅为 C2（`.stat` 保留）、C3（KPI <768 塌陷）、§6.3 三个骨架修饰类、`.grid--cards`/`.panel--upcoming`/`.is-filtered`/`.is-error` 等状态类——建议回填进 01 文档附录，保持单一事实源。
 - **给 Phase 3**：先壳（§8.1–8.4）后页面（§3）后状态（§5/§6）；每页落地后用 §8.8 自查锚点；`vitest` 风格块报错属预期（C1），不要回退类名。
-- **给 Phase 4**：更新 `tests/frontend.test.ts` 的「Bento 风格契约」与「响应式与无障碍契约」两个 describe 块至新规范（类名/半径/缩放/断点），功能块零改动。
+- **给 Phase 4**：`tests/frontend.test.ts` 的「Bento 风格契约」与「响应式与无障碍契约」样式断言已于 Phase 3 同步更新并通过（commit b6634f1，功能块零改动）——复核时确认全绿即可；另建议以体验视角走查三档响应式、抽屉、空/加载态与无障碍清单（§4/§6/§7）。
 
 
 

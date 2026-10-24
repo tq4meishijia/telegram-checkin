@@ -27,7 +27,7 @@ Cron(* * * * *) → cron/runner 扫 due 任务（JOIN accounts 取本任务所�
 src/        Worker 源码：index 入口 / auth 鉴权 / ratelimit 登录限流 / password 密码哈希
             / validation 输入校验 / cron 调度与执行 / tg GramJS 客户端
             / api 路由（accounts/password/tasks/logs/overview）
-public/     管理界面（原生 SPA，零构建，hash 路由，Bento Grid 风格）
+public/     管理界面（原生 SPA，零构建，hash 路由，StyleKit Dashboard Layout 风格）
 migrations/ D1 迁移（0001 初始化 / 0002 加固 / 0003 多账户）
 scripts/    本地登录脚本 login.mjs（非交互，产出 StringSession）
 tests/      单测 + 集成测试（tests/helpers/fake-db.ts 为内存版 D1）
@@ -167,12 +167,13 @@ npm run db:export   # 导出到 backups/telegram-checkin-db.sql（gitignored，�
 - 单账户同一时刻只有一个连接；多账户任务是**串行**执行的（单轮最多 10 条），这是为避免并发连接触发 Telegram 风控，不是缺陷。
 - 管理端登录态为无状态 Cookie，不支持单独吊销某一个 Cookie；「退出登录」与「修改密码」采用全局吊销（epoch +1）。
 - StringSession 明文存 D1：拿到 D1 读取权限 = 拿到账号控制权，请妥善保管 Cloudflare 账号与 Worker 部署权限。
-- 前端视觉回归未做浏览器自动化（见 `docs/` 测试报告的说明），改动 `public/` 后请人工过一遍桌面与移动两种宽度。
+- 前端视觉回归：2026-10-24 重设计轮已用 browser-skill（bsk）对桌面 1280 / 移动 390 两档宽度做过实测（五页面 + 模态框 + 搜索 + 抽屉 + 暗色），流程见 `AGENT_HANDOFF.md` §9；后续改动 `public/` 建议仍按此流程复验（`bsk daemon start --foreground` 起守护 → `bsk session start` → `bsk emulate --width …` → 截图/observe）。
 
 ## 变更记录
 
 | 日期 | 变更 | 提交 |
 |---|---|---|
+| 2026-10-24 | **前端 Dashboard Layout 风格重设计（本地 commit，未部署）**：参考 StyleKit「Dashboard Layout」重写 `public/` 视觉——左侧 256px 深色侧栏 + 顶部工具栏（页面标题/搜索/通知铃/用户）+ 内容区（KPI 行 4 等宽 + 面板 3 列主次栅格 + 全宽列表面板）；新增骨架屏/空态/抽屉（<768px）/顶栏当前页搜索过滤/`body.is-auth` 登录态切壳；业务/API/路由零改动。规范落盘 `docs/stylekit-dashboard-layout.md` + `docs/ui-redesign/01-visual-spec.md`/`02-ux-spec.md`；契约测试风格断言同步换代（CSP/功能契约不动），单测 167 → **171**；bsk 浏览器实测桌面/移动/暗色全过。**未 push、未 deploy，线上仍是旧视觉（版本 `e213c434`）** | `b6634f1` 等，见 `git log` |
 | 2026-10-24 | **网页交互式登录**：账户页「+ 添加账户」新增手机号向导（手机号 → 验证码 → 两步密码 → 命名保存），全程在服务端完成，不依赖本地脚本；新增 `login_flows` 表（迁移 0004，10 分钟过期、用完即删）与 `/api/accounts/login/{start,code,password,finish}` 四个端点 + 状态查询/取消；支持自定义 `api_id`/`api_hash` 兜底（公开值 `17349` 在部分来源 IP 会被限流 `API_ID_PUBLISHED_FLOOD`）；Telegram 错误统一映射为中文提示；新增 20 例测试（147 → **167**）。**已上线**，版本 `e213c434` | 见 `git log` |
 | 2026-10-24 | **多账户 + 密码修改 + 前端重构（已上线）**：新增 `accounts` 表与 `/api/accounts`（增删改查/验证/切换/默认，重复登录 409 拦截，级联删除）；runner 按任务所属账户取 session，会话失效自动标记账户 invalid；新增 `/api/password`（PBKDF2 哈希 + 强度校验 + 二次确认，改后全局吊销会话）；`public/` 按 Bento Grid 风格重写（响应式三档断点 + 暗色模式 + reduced-motion）；顺带修复 P0-1 未鉴权 logout、P1-1 时区下拉静默改写、P1-2 `Origin: null` 500、P2-2 DELETE 404、P2-3 upcoming 含过期、P2-4 历史脏排期阻塞启停、P2-8 补 `nosniff`，以及浏览器实测发现的 esc 漏定义与 api() 401 误跳转；单测 72 → **141**；线上版本 `fa921228`，cron cpuTime 实测 1ms | 见 `git log` |
 | 2026-10-24 | 全量代码通读与实测验证，产出 `docs/project-overview-2026-10-24.md` | 见 `git log` |

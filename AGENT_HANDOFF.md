@@ -9,7 +9,7 @@
 
 ## 0. 一分钟现状（2026-10-24 多账户迭代后）
 
-- **进度**：M0–M6 全部完成并上线；2026-10-24 先后完成「安全/稳定性加固」「全量代码通读」「多账户 + 密码修改 + 前端重构」三轮迭代（变更清单见 §17 / §19），M7 剩余项未开始。
+- **进度**：M0–M6 全部完成并上线；2026-10-24 先后完成「安全/稳定性加固」「全量代码通读」「多账户 + 密码修改 + 前端重构」「前端 Dashboard Layout 风格重设计」四轮迭代（变更清单见 §17 / §19），M7 剩余项未开始。
 - **线上地址**：https://telegram-checkin.tq4meishijia.workers.dev （2026-10-24 重命名后的新地址；旧地址 tg-checkin.… 随 Worker 名变更已失效）
 - **部署状态**：✅ **已上线（2026-10-24 17:10）**——线上版本 **`e213c434-d6e0-4906-8879-04972a11c7fe`**，含「网页交互式登录 Telegram 账号」；先 apply `0004_login_flows.sql` 再 deploy（严守红线 #8），详见 §19.12。上一版 `fa921228` 是多账户/密码/前端重构（§19.8）。
   - **0003 迁移对存量库的影响**：自动把 `settings.tg_session` 迁成 1 号「默认账户」（`is_default=1`、`status='ok'`），存量任务 `account_id` 回填为 1，并删除 settings 旧键。**实测本次线上库迁移前 settings/tasks 均为空**，故只建出 1 号空 session 占位账户（`status='unknown'`）。
@@ -17,7 +17,8 @@
   - **线上待办**：Telegram session 未配置（1 号账户 `session` 为空、`status='unknown'`）——可用网页「账户页 → 添加账户 → 手机号登录」（§19.11），或跑 `scripts/login.mjs` 后粘贴 StringSession。
   - **公开 api_id 的可用性（已实测，按来源 IP 而异）**：`TG_API_ID=17349`（tdesktop 公开值）在**本地 dev**（家宽/代理出口）调 `auth.sendCode` 被拒（`API_ID_PUBLISHED_FLOOD`），但在**线上 Worker**（Cloudflare 出口 IP）同一 api_id **成功返回 201**。说明这是按来源 IP 的风控限流，不是 api_id 全局封禁。线上可直接用默认值；若某天遇到 `api_id_restricted`，再在向导「高级」里填自己的 api_id/api_hash。已登录账号发消息（cron 签到）不受影响。详见 §19.11.5 / §19.12。
 - **线上现有数据**：1 个任务「每日签到」（目标 `me`、指令 `/checkin`、daily 08:00 Asia/Shanghai）；有成功/失败日志若干。
-- **代码健康度**：`npx tsc --noEmit` 无错误；vitest **167/167** 通过（10 个测试文件）；包体 gzip 约 340 KiB（远低于 3MB 上限）。
+- **代码健康度**：`npx tsc --noEmit` 无错误；vitest **171/171** 通过（10 个测试文件）；包体 gzip 约 340 KiB（远低于 3MB 上限）。
+- **前端视觉体系（2026-10-24 重设计，未部署）**：`public/` 已按 StyleKit「Dashboard Layout」风格重写——左侧 256px 深色侧栏（`#111827`，两种色彩模式下都深色）+ 顶部工具栏（页面标题/搜索/通知铃/用户区）+ 内容区（KPI 行 4 等宽 + 面板 3 列主次栅格 + 全宽列表面板）；设计规范在 `docs/stylekit-dashboard-layout.md` 与 `docs/ui-redesign/01-visual-spec.md`、`02-ux-spec.md`；**业务/API/路由零改动**，纯视觉层。本轮改动**仅在本地 commit（未 push、未 deploy）**，上线需用户下令（先迁移再 deploy 的顺序不涉及迁移，本轮无 D1 变更）。详见 §19.13。
 - **QA 验证（2026-10-24）**：加固轮全量测试 **IS_PASS: YES**（单测 72/72、冒烟 7/7、对抗探测 8/8），报告 `docs/qa-report-2026-10-24.md`；多账户轮验证见 §19.4。
 - **代码仓库**：https://github.com/tq4meishijia/telegram-checkin （**公开**仓库，MIT LICENSE；2026-10-24 由 `cf-tg-checkin` 重命名而来，旧地址自动重定向）。
 - **CI**：`.github/workflows/ci.yml`，push/PR 自动跑 `npm ci` + typecheck + test。
@@ -326,10 +327,13 @@ telegram-checkin/
 ## 8. 前端 SPA（`public/`，零构建原生 JS）
 
 - **hash 路由**：`#/login`、`#/`（仪表盘）、`#/tasks`、`#/logs`、`#/settings`。
+- **设计体系（2026-10-24 重设计后）**：StyleKit Dashboard Layout——外壳 `.layout` = 左侧 `.sidebar`（256px 深色 `#111827`，当前页 `.is-active` + `aria-current`，底部用户区含退出）+ `.sidebar-backdrop` + `.main`（`.topbar` 顶栏 + `.content#app` 内容区）。登录态由 `body.is-auth` 切壳（CSS 隐藏侧栏/顶栏并居中）。令牌/组件/交互的权威定义在 `docs/ui-redesign/01-visual-spec.md`（视觉）与 `02-ux-spec.md`（体验），**改 `public/` 前先读这两份**。`tests/frontend.test.ts` 的风格契约块随体系同步更新（CSP/功能契约块不动）。
 - **统一 `api()` 封装**：401 且当前不在登录页时才跳 `#/login`（避免重复设同 hash 不触发 hashchange）。
 - **渲染代次令牌 `currentRenderSeq`**：每次 navigate 递增；四个异步渲染函数 await 后校验代次，过期结果一律丢弃——防止旧页面的慢请求回调覆盖新页面（曾导致未登录时错误卡片卡死）。
 - **`parseDate()`（重要）**：D1 `datetime('now')` 输出 `'YYYY-MM-DD HH:MM:SS'`（UTC、空格、无 Z），浏览器会把空格格式当**本地时区**解析，导致时间偏 8 小时。parseDate 统一把无 Z 的空格串转成 `T...Z` 再解析；`fmtTime/relTime` 都走它。
 - 任务表单是模态框（showTaskModal），字段与 API 一致。
+- **顶栏搜索**：当前页客户端过滤（`data-search` 标记 + `is-hidden` + 无结果 `[data-filter-empty]` 提示），设置/登录页整槽隐藏，<768px 隐藏，路由切换即清空；不发请求、不影响业务。
+- **移动端抽屉**（<768px）：汉堡/backdrop/ESC/点导航链接 四种关闭途径，`updateNav()` 同步顶栏标题（`ROUTE_TITLES`）与 `body.is-auth`。
 
 ---
 
@@ -956,6 +960,40 @@ POST https://telegram-checkin.tq4meishijia.workers.dev/api/accounts/login/start
 - 「高级：自定义 api_id/api_hash」保留为**兜底**（真遇到 `api_id_restricted` 时用）；
 - 对不存在的号码 `sendCode` 也返回成功是 Telegram 的**防枚举设计**（验证码不会真发出），
   所以 201 只证明链路通，不证明号码有效。
+
+---
+
+## 19.13 前端 Dashboard Layout 风格重设计（2026-10-24 晚，**本地 commit 未部署**）
+
+**任务**：参考 StyleKit「Dashboard Layout」风格（https://www.stylekit.top/zh/styles/dashboard-layout）重做管理前端视觉；业务功能/API/路由零改动。由 UI 设计全栈专家团三阶段交付：视觉规范 → 体验规范 → 工程落地（lead 编排）。
+
+### 交付物
+- `docs/stylekit-dashboard-layout.md`：风格参考全文落盘（唯一风格依据）
+- `docs/ui-redesign/01-visual-spec.md`：视觉规范（token 映射/双模式色板/组件规范/14 条矛盾裁决/新旧类名对照表）
+- `docs/ui-redesign/02-ux-spec.md`：体验规范（IA/逐页布局/响应式三档/交互矩阵/空加载态/无障碍/C1–C8 冲突裁决）
+- `public/style.css`：按 01 §1.7 token 重写（578 行）
+- `public/app.js`：外壳与全部页面 markup 重建，JS 逻辑逐行保留（1528 行）
+- `tests/frontend.test.ts`：「Bento 风格契约」→「Dashboard Layout 风格契约」（8→11 条）；响应式块断点 900/640→1023/767 + 抽屉断言；**CSP 契约与功能完整性契约零改动**
+- commit `b6634f1`（本地 main，未 push）
+
+### 风格要点（落地值）
+- 签名结构：侧栏 256px `#111827`（暗色签名，两种模式下都深色）+ 顶栏（标题/搜索/通知铃/用户）+ 内容区（KPI 4 等宽 + 面板 3 列主次 + 全宽列表面板）
+- 圆角三档 12/8/6px；主按钮 `#4f46e5`（白字对比度 6.29:1，AA）；KPI 大数字 36px + tabular-nums
+- 交互：150ms ease-out；仅 KPI hover 上浮 + 数字微放大；行/面板 hover 只换底色；`active:scale(.97)`；focus-visible 2px 环
+- 搜索=当前页客户端过滤；通知铃=跳 #/logs 纯链接；登录态 `body.is-auth` 切壳
+- 加载态=骨架屏 + 字面「加载中」占位（测试探针依赖）；空态=图标+标题+提示（+动作）
+
+### 验证（全过）
+- `npm run verify`：tsc 0 错误 + vitest **171/171**（frontend 30 条：CSP 3 + 风格 11 + 响应式 5 + 功能 11）
+- 禁止项扫描：style.css 无 rounded-none/3xl/full、shadow-2xl、text-5xl+、渐变、玻璃态、Inter/Roboto/Geist；app.js 无内联事件属性、无旧类名残留（stat 家族为规范特许保留）
+- 浏览器实测（wrangler dev + bsk，Edge）：桌面 1280 五页面 + 模态框 + 搜索过滤/无结果空态；移动 390 抽屉（汉堡/backdrop/ESC/点链接关闭/导航后关）+ KPI 单列 + 搜索槽隐藏；暗色模式全 token 实渲；浅色以 token 覆盖代理验证；console 无应用错误
+- 测试锚点全保留：6 路由、全部 data-action/id/函数名、`class="field__error" id="am-err"`×5、esc()×48、登录文案逐字
+
+### 本地浏览器复验取登录态的方法（无口令时）
+不知道 `.dev.vars` 里 `ADMIN_PASSWORD` 时：从本地 D1 读 `settings.auth_signing_key`（`wrangler d1 execute --local`），按 `src/auth.ts` 的 `<expiry>.<epoch>.<hmac_hex>` 格式用 Node 造 Cookie（epoch 缺省 0），curl 带 `auth=` 验证 200 后，浏览器里 `document.cookie` 注入即可。**只用于本地 dev**。
+
+### 未部署说明
+本轮无 D1 结构变更，无需迁移；上线只需用户下令后 `npm run deploy`（会同时推送本地 commit）。**当前线上版本仍是 `e213c434`（旧视觉）**。
 
 ### 遗留（用户侧）
 1. **1 号账户仍是 `status='invalid'`、session 为空**——现在可以直接在网页「账户页 → 添加账户 → 手机号登录」用真实手机号完成登录，不需要本地脚本、不需要自备 api_id。
