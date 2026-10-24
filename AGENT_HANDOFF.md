@@ -723,3 +723,43 @@ npx wrangler deploy
 说明此前从未成功登录过，当前生效口令就是 secret。
 
 **测试数**：141 → **143**（新增 2 条契约测试）。
+
+### 19.10 恢复交互式登录（2026-10-24 16:40）
+
+用户反馈「交互式登录功能被移除或改动」。**核查结论：没有任何提交移除过它——它从未被实现。**
+
+**证据链**：
+| 查证项 | 结果 |
+|---|---|
+| `git log --follow -- scripts/login.mjs` | **只有 1 条提交**（初始提交 `e8f8c6c`，+81 行），此后从未修改 |
+| `git log 885c095..HEAD -- scripts/login.mjs` | 0 条——我的 4 个提交一次都没碰过它 |
+| 初始版本内容 | 从第一版就是**非交互**（`TG_PHONE` 环境变量 + 轮询 `.tg_code.txt`） |
+| `git log -S"readline" --all` | 只命中 `e8f8c6c`，且出现在 **`AGENT_TASK.md` 的规格文本**里，不是实现 |
+| `PLAN.md:167` | 写的是「本地**交互式**登录 → 输出 StringSession」——**文档与实现从第一天就不一致** |
+
+即：`AGENT_TASK.md:105-107` 要求「引入 `node readline` 做交互」「`client.start({phoneNumber, phoneCode, password})` 交互式登录」，
+但落地实现走了环境变量 + 文件轮询的非交互路线。**交互式登录属于"规格有、实现无"，本次按原始规格补齐。**
+
+**实现**（`scripts/login.mjs`）：
+- **交互模式为默认**：`node --env-file=.dev.vars scripts/login.mjs` 用 `node:readline/promises` 依次提示
+  `手机号 → 验证码（区分 App 内 / 短信，来自 GramJS 的 isCodeViaApp）→ 二步密码（未开启回车跳过）`
+- **非交互模式保留**：加 `--non-interactive`（或 `TG_NON_INTERACTIVE=1`）即恢复原有行为，
+  手机号/二步密码走环境变量、验证码轮询文件 —— **既有 Agent 流程与文档命令不受影响**
+- 环境变量优先：`.dev.vars` 里填了 `TG_PHONE`/`TG_2FA` 就不再提示，缺哪个问哪个
+- **TTY 守卫**：交互模式在非 TTY（管道/CI）下直接退出并指引改用 `--non-interactive`，避免 readline 挂死
+- 失败路径统一 `process.exitCode = 1`，`rl.close()` 放在 `finally`，不留悬空句柄
+
+**验证**：
+| 项 | 结果 |
+|---|---|
+| `node --check` | ✅ 语法通过 |
+| `node:readline/promises` 默认导出 | ✅ 实测 `default.createInterface` 是 function |
+| 无 TTY | ✅ 退出 1，打印 TTY 守卫指引 |
+| `--non-interactive` 缺 TG_PHONE | ✅ 退出 1，打印对应错误 |
+| 缺 API 凭据 | ✅ 退出 1 |
+| **真实 TTY（winpty）实跑** | ✅ 连上 Telegram DC（149.154.167.91:80，走 SOCKS5 7897），打印 `[driver] connected（交互模式）`，**弹出 `手机号（含国际区号，如 +8613xxxxxxxxx）:` 提示并等待输入**（验证到提示即中止，未向任何号码发起验证码请求） |
+| 新增 `tests/login-script.test.ts` | ✅ 4 例（三条守卫 + 一条"默认必须是交互模式"的源码契约） |
+
+**未覆盖**：完整登录（真实验证码 → 二步密码 → 拿到 SESSION）需要真实手机号与短信，无法自动化；上述已证明到"提示渲染 + 等待输入"这一步。
+
+**测试数**：143 → **147**。

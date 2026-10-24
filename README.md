@@ -68,18 +68,32 @@ npm run verify
 - 修改密码会同时 bump `auth_epoch`，**吊销所有已签发的 Cookie**，需重新登录。
 - 登录受同 IP 60 秒 5 次失败限流保护。
 
-## 拿 Telegram Session（M1 闸门，非交互模式）
+## 拿 Telegram Session（M1 闸门）
 
 1. Telegram 凭据项目统一使用 **Telegram Desktop 内置的公开 api_id/api_hash**（`api_id=17349`，来自 tdesktop 官方源码，无需申请）——本地 `.dev.vars` 已预填，直接用。
-2. 非交互登录（手机号/二步密码走环境变量，验证码写入文件由脚本轮询）：
+2. 登录分两种模式，**默认是交互式**（在终端里按提示输入）：
+
+   **交互模式（默认）** —— 依次提示输入手机号、验证码、二步密码：
+
+   ```bash
+   node --env-file=.dev.vars scripts/login.mjs
+   # 手机号（含国际区号，如 +8613xxxxxxxxx）:
+   # 短信验证码 / Telegram App 内收到的验证码:
+   # 二步验证密码（未开启直接回车）:
+   ```
+
+   **非交互模式** —— 供 Agent / CI 等无终端环境驱动，验证码写文件由脚本轮询：
 
    ```bash
    # PowerShell 示例
    $env:TG_PHONE="+8613xxxxxxxxx"
    $env:TG_2FA="your_2fa_password"
-   node --env-file=.dev.vars scripts/login.mjs
-   # 收到短信验证码后，把验证码写进 .tg_code.txt，脚本自动继续
+   node --env-file=.dev.vars scripts/login.mjs --non-interactive
+   # 收到验证码后，把验证码写进 .tg_code.txt，脚本自动继续
    ```
+
+   > 交互模式下若 `.dev.vars` 已填 `TG_PHONE` / `TG_2FA`，会直接复用、不再提示；
+   > 只有缺哪个才问哪个。二步密码在终端里是明文回显的，注意旁人或录屏。
 
 3. 终端输出 `SESSION=1...` 长串。
 4. 打开管理界面，登录 → **账户页**「+ 添加账户」→ 粘贴 session。
