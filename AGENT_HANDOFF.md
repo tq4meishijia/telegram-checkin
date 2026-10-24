@@ -694,3 +694,32 @@ npx wrangler deploy
 1. Telegram session 未配置——需跑 `scripts/login.mjs` 拿 StringSession，在「账户」页添加（添加前任务执行会失败并把账户标记为 invalid）
 2. 登录口令是 `ADMIN_PASSWORD` secret 的强随机值，不是 `admin`
 3. 建议上线后连续观察 Cloudflare 面板的 `exceededCpu` 指标（本次 tail 实测 cron cpuTime 1ms，余量充足）
+
+### 19.9 用户反馈修复：设置页鉴权 + 登录口令误导（2026-10-24 16:30）
+
+用户反馈两个问题，均已修复并重新部署（版本 `37801ebd-89d3-4550-8f3f-72998295a82b`）。
+
+**问题 1（真 bug，本轮重写引入）：未登录也能进设置页**
+
+- 根因：`renderSettings` 是 6 个渲染函数里**唯一一个非 `async`、且不先调 API** 的。
+  其余 4 个（dashboard/tasks/accounts/logs）都以 `api()` 开头，401 会被 `api()` 自动重定向到登录页；
+  `renderSettings` 直接渲染表单，只在点「修改密码」时才发请求 → 匿名访问 `#/settings` 能看到完整密码表单。
+- 修复：改为 `async`，渲染前先 `await api("/api/accounts")` 做鉴权探针；未登录直接返回（`api()` 已负责跳转）。
+- 防回归：新增契约测试「除登录页外，每个渲染函数都先做鉴权探针再渲染」——
+  静态解析每个渲染函数体，剥离"加载中"占位后，要求首个 `/api/` 调用早于首次实质 `el.innerHTML`。
+- 浏览器实测：未登录访问 `#/settings` → `hash` 变 `#/login`、`hasPwForm=false`；登录后 → 正常渲染。**本地与线上均验证**。
+
+**问题 2（文案误导，非逻辑 bug）：`admin` 登录不了**
+
+- 根因：口令解析优先级是 `admin_pw_hash` → `ADMIN_PASSWORD` secret → 内置默认 `admin`。
+  线上 `ADMIN_PASSWORD` secret **已设置**，所以 `admin` 不生效——这是设计如此。
+  但登录页原写死"初始密码为 admin"，在设了 secret 的部署上就是**错误提示**。
+- 文案修复：改为「未配置 `ADMIN_PASSWORD` 时初始口令为 `admin`；忘记密码可用 `wrangler secret put ADMIN_PASSWORD` 重置。」
+- 运维处置：**已重置线上 `ADMIN_PASSWORD` secret 为新生成的强随机值**（20 位以内、无易混字符），
+  并在对话中交付用户；用户登录后应在设置页改成自己的密码（改后以 `admin_pw_hash` 为唯一准绳，secret 不再参与校验）。
+- 线上实测：新口令登录 200、带 Cookie 访问 `/api/accounts` 与 `/api/overview` 均 200、`admin` 仍 401。
+
+**诊断证据**：修复前查生产 `settings` 表为空（无 `admin_pw_hash` / 无 `auth_signing_key`），
+说明此前从未成功登录过，当前生效口令就是 secret。
+
+**测试数**：141 → **143**（新增 2 条契约测试）。
