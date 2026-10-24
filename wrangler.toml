@@ -22,6 +22,4 @@ enabled = true
 [[d1_databases]]
 binding = "DB"
 database_name = "telegram-checkin-db"
-# ⚠️ database_id 为旧账号下已不存在的库（5965162f…，7404 实测）。
-# 全新部署时：npx wrangler d1 create telegram-checkin-db，把输出的 id 填到这里。
-database_id = "5965162f-0f03-4f75-875f-7e3724cb7e2a"
+database_id = "7cee8c54-49ec-4cce-b2ae-30b214b79016"
