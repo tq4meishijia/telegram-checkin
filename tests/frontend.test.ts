@@ -1,6 +1,6 @@
 /**
  * 前端契约测试：不启动浏览器，静态校验 public/ 三件套是否满足
- * CSP（无内联事件处理器）、Bento 风格规则与响应式要求。
+ * CSP（无内联事件处理器）、Dashboard Layout 风格规则与响应式要求。
  * 视觉层面的最终确认仍需人工在浏览器里过一遍（见报告"未解决问题"）。
  */
 import { describe, it, expect } from "vitest";
@@ -31,38 +31,54 @@ describe("CSP 契约（script-src 'self'）", () => {
   });
 });
 
-describe("Bento 风格契约", () => {
-  it("使用 CSS Grid 且存在跨列/跨行卡片（不是等大网格）", () => {
-    expect(styleCss).toMatch(/\.bento\s*\{[^}]*display:\s*grid/);
-    expect(styleCss).toMatch(/\.col-2\s*\{[^}]*grid-column:\s*span 2/);
-    expect(styleCss).toMatch(/\.row-2\s*\{[^}]*grid-row:\s*span 2/);
+describe("Dashboard Layout 风格契约", () => {
+  it("侧栏签名：深色侧栏 + 顶栏 + 内容区三件套", () => {
+    expect(styleCss).toMatch(/\.sidebar\s*\{[^}]*width:\s*var\(--sidebar-w\)/);
+    expect(styleCss).toContain("--sidebar-bg:#111827");
+    expect(styleCss).toMatch(/\.topbar\s*\{/);
+    expect(styleCss).toMatch(/\.content\s*\{/);
   });
 
-  it("圆角统一且不含被禁用的 rounded-none / rounded-sm 等价值", () => {
-    expect(styleCss).toContain("--radius: 16px");
+  it("侧栏当前页高亮用底色，不用单侧粗边框", () => {
+    expect(styleCss).toMatch(/\.sidebar__link\.is-active\s*\{[^}]*background:\s*var\(--sidebar-active\)/);
+    expect(styleCss).not.toMatch(/border-(left|right):\s*\d+px/);
+  });
+
+  it("KPI 4 等宽 + 面板 3 列主次（主面板跨 2 列）", () => {
+    expect(styleCss).toMatch(/\.kpi-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/);
+    expect(styleCss).toMatch(/\.grid--panels\s*\{[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/);
+    expect(styleCss).toMatch(/\.col-2\s*\{[^}]*grid-column:\s*span 2/);
+  });
+
+  it("圆角三档（12/8/6）且不含被禁用的圆角值", () => {
+    expect(styleCss).toContain("--radius-card:12px");
+    expect(styleCss).toContain("--radius-control:8px");
+    expect(styleCss).toContain("--radius-badge:6px");
     expect(styleCss).not.toMatch(/border-radius:\s*0(;|\s|$)/);
     expect(styleCss).not.toMatch(/border-radius:\s*2px/);
+    expect(styleCss).not.toMatch(/border-radius:\s*999px/);
+    expect(styleCss).not.toMatch(/border-radius:\s*50%/);
   });
 
-  it("网格间距一致：桌面 16px、移动 12px", () => {
-    const bento = styleCss.match(/\.bento\s*\{[^}]*\}/)![0];
-    expect(bento).toMatch(/gap:\s*var\(--gap\)/); // 16px
-    const mobile = styleCss.match(/@media \(max-width: 640px\)\s*\{[^@]*?\.bento\s*\{[^}]*\}/)![0];
-    expect(mobile).toMatch(/gap:\s*var\(--gap-sm\)/); // 12px
+  it("KPI 是唯一悬停上浮元素（位移 + 阴影 + 数字微放大）", () => {
+    expect(styleCss).toMatch(/\.kpi:hover\s*\{[^}]*translateY\((var\(--lift\)|-2px)\)/);
+    expect(styleCss).toMatch(/\.kpi:hover\s*\{[^}]*box-shadow/);
+    expect(styleCss).toMatch(/\.kpi:hover \.kpi__value\s*\{[^}]*scale\(/);
   });
 
-  it("卡片有悬停上浮 + 阴影扩散过渡", () => {
-    expect(styleCss).toMatch(/\.card--lift:hover\s*\{[^}]*translateY\(-2px\)/);
-    expect(styleCss).toMatch(/\.card--lift:hover\s*\{[^}]*box-shadow/);
-    expect(styleCss).toMatch(/transition:[^;]*transform[^;]*var\(--dur\)/);
+  it("数据行 hover 只换底色（无位移无缩放）", () => {
+    expect(styleCss).toMatch(/\.row:hover\s*\{[^}]*background:\s*var\(--hover-bg\)/);
   });
 
-  it("图标有 group-hover 联动（卡片悬停时放大）", () => {
-    expect(styleCss).toMatch(/\.card--lift:hover \.card__icon\s*\{[^}]*scale\(1\.1\)/);
+  it("按下有 active:scale 反馈（0.97）", () => {
+    expect(styleCss).toMatch(/\.btn:active\s*\{[^}]*scale\((var\(--press-scale\)|0\.97)\)/);
   });
 
-  it("按下有 active:scale-95 反馈", () => {
-    expect(styleCss).toMatch(/\.btn:active\s*\{[^}]*scale\(0\.95\)/);
+  it("组件 token 一致：按钮 / 主按钮 / 输入框 / 焦点环", () => {
+    expect(styleCss).toMatch(/\.btn\s*\{[^}]*border-radius:\s*var\(--radius-control\)/);
+    expect(styleCss).toMatch(/\.btn--primary\s*\{[^}]*background:\s*var\(--accent-strong\)/);
+    expect(styleCss).toMatch(/\.input[^{]*\{[^}]*background:\s*var\(--surface-2\)/);
+    expect(styleCss).toMatch(/\.input:focus[^{]*\{[^}]*box-shadow:[^}]*var\(--focus-ring\)/);
   });
 
   it("使用系统字体栈，不用 Inter/Roboto/Geist", () => {
@@ -72,20 +88,31 @@ describe("Bento 风格契约", () => {
     expect(styleCss).not.toMatch(/\bGeist\b/);
   });
 
-  it("无渐变文字 / 玻璃态 / 单侧粗边框装饰", () => {
+  it("无渐变文字 / 玻璃态 / 渐变 / 单侧粗边框装饰", () => {
     expect(styleCss).not.toMatch(/background-clip:\s*text/);
     expect(styleCss).not.toMatch(/backdrop-filter/);
+    expect(styleCss).not.toMatch(/linear-gradient/);
     expect(styleCss).not.toMatch(/border-(left|right):\s*\d+px/);
+  });
+
+  it("空态与骨架类存在", () => {
+    expect(styleCss).toMatch(/\.empty\s*\{/);
+    expect(styleCss).toMatch(/\.skeleton\s*\{/);
   });
 });
 
 describe("响应式与无障碍契约", () => {
-  it("三档断点：桌面 4 列 / 平板 2 列 / 手机 1 列", () => {
-    expect(styleCss).toMatch(/@media \(max-width: 900px\)/);
-    expect(styleCss).toMatch(/@media \(max-width: 640px\)/);
+  it("三档断点：1024/768 两档边界 + 4/2/1 列模式", () => {
+    expect(styleCss).toMatch(/@media \(max-width: 1023px\)/);
+    expect(styleCss).toMatch(/@media \(max-width: 767px\)/);
     expect(styleCss).toMatch(/grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/);
     expect(styleCss).toMatch(/grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
     expect(styleCss).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
+  });
+
+  it("移动端抽屉：backdrop 与 is-open 滑出类", () => {
+    expect(styleCss).toMatch(/\.sidebar-backdrop\s*\{/);
+    expect(styleCss).toMatch(/\.sidebar\.is-open\s*\{/);
   });
 
   it("有 prefers-reduced-motion 降级", () => {
