@@ -11,14 +11,14 @@
 
 - **进度**：M0–M6 全部完成并上线；2026-10-24 先后完成「安全/稳定性加固」「全量代码通读」「多账户 + 密码修改 + 前端重构」「前端 Dashboard Layout 风格重设计」四轮迭代（变更清单见 §17 / §19），M7 剩余项未开始。
 - **线上地址**：https://telegram-checkin.tq4meishijia.workers.dev （2026-10-24 重命名后的新地址；旧地址 tg-checkin.… 随 Worker 名变更已失效）
-- **部署状态**：✅ **已上线（2026-10-24 17:10）**——线上版本 **`e213c434-d6e0-4906-8879-04972a11c7fe`**，含「网页交互式登录 Telegram 账号」；先 apply `0004_login_flows.sql` 再 deploy（严守红线 #8），详见 §19.12。上一版 `fa921228` 是多账户/密码/前端重构（§19.8）。
+- **部署状态**：✅ **已上线（2026-10-24 21:30）**——线上版本 **`3bcfd7f0-54f4-4e8f-ac0f-6fabc6efa8d8`**（前端 Dashboard Layout 重设计，见 §19.13）；上一版 `e213c434` 是网页交互式登录（§19.12）。本轮无 D1 迁移，直接 deploy。**0003/0004 迁移均已在远程应用完毕**。
   - **0003 迁移对存量库的影响**：自动把 `settings.tg_session` 迁成 1 号「默认账户」（`is_default=1`、`status='ok'`），存量任务 `account_id` 回填为 1，并删除 settings 旧键。**实测本次线上库迁移前 settings/tasks 均为空**，故只建出 1 号空 session 占位账户（`status='unknown'`）。
   - **登录口令**：线上 `ADMIN_PASSWORD` secret 已设置（`wrangler secret list` 确认三个 secret 齐全），因此登录口令是**该 secret 的强随机值**，不是 `admin`；`admin` 仅在该 secret 未设置时生效。改过密码后以 `settings.admin_pw_hash` 为唯一准绳。
   - **线上待办**：Telegram session 未配置（1 号账户 `session` 为空、`status='unknown'`）——可用网页「账户页 → 添加账户 → 手机号登录」（§19.11），或跑 `scripts/login.mjs` 后粘贴 StringSession。
   - **公开 api_id 的可用性（已实测，按来源 IP 而异）**：`TG_API_ID=17349`（tdesktop 公开值）在**本地 dev**（家宽/代理出口）调 `auth.sendCode` 被拒（`API_ID_PUBLISHED_FLOOD`），但在**线上 Worker**（Cloudflare 出口 IP）同一 api_id **成功返回 201**。说明这是按来源 IP 的风控限流，不是 api_id 全局封禁。线上可直接用默认值；若某天遇到 `api_id_restricted`，再在向导「高级」里填自己的 api_id/api_hash。已登录账号发消息（cron 签到）不受影响。详见 §19.11.5 / §19.12。
 - **线上现有数据**：1 个任务「每日签到」（目标 `me`、指令 `/checkin`、daily 08:00 Asia/Shanghai）；有成功/失败日志若干。
 - **代码健康度**：`npx tsc --noEmit` 无错误；vitest **171/171** 通过（10 个测试文件）；包体 gzip 约 340 KiB（远低于 3MB 上限）。
-- **前端视觉体系（2026-10-24 重设计，未部署）**：`public/` 已按 StyleKit「Dashboard Layout」风格重写——左侧 256px 深色侧栏（`#111827`，两种色彩模式下都深色）+ 顶部工具栏（页面标题/搜索/通知铃/用户区）+ 内容区（KPI 行 4 等宽 + 面板 3 列主次栅格 + 全宽列表面板）；设计规范在 `docs/stylekit-dashboard-layout.md` 与 `docs/ui-redesign/01-visual-spec.md`、`02-ux-spec.md`；**业务/API/路由零改动**，纯视觉层。本轮改动**仅在本地 commit（未 push、未 deploy）**，上线需用户下令（先迁移再 deploy 的顺序不涉及迁移，本轮无 D1 变更）。详见 §19.13。
+- **前端视觉体系（2026-10-24 重设计，已上线）**：`public/` 已按 StyleKit「Dashboard Layout」风格重写——左侧 256px 深色侧栏（`#111827`，两种色彩模式下都深色）+ 顶部工具栏（页面标题/搜索/通知铃/用户区）+ 内容区（KPI 行 4 等宽 + 面板 3 列主次栅格 + 全宽列表面板）；设计规范在 `docs/stylekit-dashboard-layout.md` 与 `docs/ui-redesign/01-visual-spec.md`、`02-ux-spec.md`；**业务/API/路由零改动**，纯视觉层。已于 2026-10-24 21:30 上线（版本 `3bcfd7f0`，无 D1 变更），代码已推送 GitHub。详见 §19.13。
 - **QA 验证（2026-10-24）**：加固轮全量测试 **IS_PASS: YES**（单测 72/72、冒烟 7/7、对抗探测 8/8），报告 `docs/qa-report-2026-10-24.md`；多账户轮验证见 §19.4。
 - **代码仓库**：https://github.com/tq4meishijia/telegram-checkin （**公开**仓库，MIT LICENSE；2026-10-24 由 `cf-tg-checkin` 重命名而来，旧地址自动重定向）。
 - **CI**：`.github/workflows/ci.yml`，push/PR 自动跑 `npm ci` + typecheck + test。
@@ -992,8 +992,30 @@ POST https://telegram-checkin.tq4meishijia.workers.dev/api/accounts/login/start
 ### 本地浏览器复验取登录态的方法（无口令时）
 不知道 `.dev.vars` 里 `ADMIN_PASSWORD` 时：从本地 D1 读 `settings.auth_signing_key`（`wrangler d1 execute --local`），按 `src/auth.ts` 的 `<expiry>.<epoch>.<hmac_hex>` 格式用 Node 造 Cookie（epoch 缺省 0），curl 带 `auth=` 验证 200 后，浏览器里 `document.cookie` 注入即可。**只用于本地 dev**。
 
-### 未部署说明
+### 未部署说明（已过时，见下方上线记录）
 本轮无 D1 结构变更，无需迁移；上线只需用户下令后 `npm run deploy`（会同时推送本地 commit）。**当前线上版本仍是 `e213c434`（旧视觉）**。
+
+### 上线记录（2026-10-24 21:30，用户下令「上线」）
+
+**顺序**：预检 → 部署 → 线上验证 → 推送 → 文档同步。本轮**无 D1 迁移**（`migrations list --remote` → No migrations to apply）。
+
+- 预检：`git status` 干净、领先 origin 2 个 commit、3 个 secret 齐全、`npm run verify` **171/171**
+- 部署：`npm run deploy` → 版本 **`3bcfd7f0-54f4-4e8f-ac0f-6fabc6efa8d8`**；上传 2 个静态资源（`/style.css` `/app.js`），gzip **343.32 KiB**，Startup 81ms，cron `* * * * *` 已注册
+- 线上验证（全过）：
+
+| 项 | 结果 |
+|---|---|
+| `/api/health` | 200 `{"ok":true}` |
+| 匿名访问 `/api/overview` `/api/tasks` `/api/accounts` `/api/logs` | 全 **401** |
+| `/` `/app.js` `/style.css` | 全 **200** |
+| 线上 `style.css` 新 token | 命中（`--sidebar-bg:#111827`、`--radius-card:12px`） |
+| 线上 `app.js` 新标记 | 13 处（`sidebar__link` / `topbar-search` / `is-auth` / Dashboard Layout） |
+| 旧类名残留（`class="card` / `bento` / `nav-link`） | **0** |
+| 安全响应头 | `/` 与 `/style.css` 均带 CSP + `nosniff`；`/app.js` 带 CSP |
+| 真实浏览器（Edge 1280，暗色） | 侧栏/顶栏/KPI/面板全渲染；真实数据（今日成功 2 / 任务 2 / 账户 3 / 默认账户 @geekqi 可用）；console 无应用错误、无 CSP 违规 |
+| cron 真实触发 | 两轮 `outcome: ok`、`cpuTime 1ms / 0ms`、`exceptions: []`、`scriptVersion.id = 3bcfd7f0…` |
+- 推送：`6c2747f..7da455d` → `origin/main`
+- 线上地址：https://telegram-checkin.tq4meishijia.workers.dev
 
 ### 遗留（用户侧）
 1. **1 号账户仍是 `status='invalid'`、session 为空**——现在可以直接在网页「账户页 → 添加账户 → 手机号登录」用真实手机号完成登录，不需要本地脚本、不需要自备 api_id。
