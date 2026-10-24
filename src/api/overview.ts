@@ -4,15 +4,45 @@ import { getSetting } from "../db";
 
 export const overviewRoute = new Hono<{ Bindings: Env }>();
 
+/**
+ * ISO(带 Z) → SQLite datetime('now') 的空格格式。
+ * run_logs.created_at 是空格格式，直接拿 ISO 'T' 串比较永远不匹配（'T' > ' '）。
+ */
+function isoToSqlite(iso: string): string | null {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().replace("T", " ").slice(0, 19);
+}
+
 // GET /api/overview — 仪表盘数据
+// 可选 query：from / to（ISO 带 Z）限定统计区间；缺省按 UTC 当天。
+// 前端传浏览器本地日界，即可得到"本地今日"口径（默认 UTC 日界对东八区会早 8 小时翻天）。
 overviewRoute.get("/overview", async (c) => {
   const today = new Date().toISOString().slice(0, 10);
 
-  // 今日成功/失败/skipped 计数
-  const stats = await c.env.DB.prepare(
-    `SELECT status, COUNT(*) as count FROM run_logs
-     WHERE created_at >= ? GROUP BY status`
-  ).bind(today).all<{ status: string; count: number }>();
+  const fromQ = c.req.query("from");
+  const toQ = c.req.query("to");
+
+  let sql = "SELECT status, COUNT(*) as count FROM run_logs WHERE created_at >= ?";
+  const params: unknown[] = [];
+
+  if (fromQ) {
+    const v = isoToSqlite(fromQ);
+    if (!v) return c.json({ error: "invalid_from" }, 400);
+    params.push(v);
+  } else {
+    params.push(`${today} 00:00:00`);
+  }
+
+  if (toQ) {
+    const v = isoToSqlite(toQ);
+    if (!v) return c.json({ error: "invalid_to" }, 400);
+    sql += " AND created_at < ?";
+    params.push(v);
+  }
+  sql += " GROUP BY status";
+
+  const stats = await c.env.DB.prepare(sql).bind(...params).all<{ status: string; count: number }>();
 
   const counts: Record<string, number> = { success: 0, failed: 0, skipped: 0 };
   for (const row of stats.results) {

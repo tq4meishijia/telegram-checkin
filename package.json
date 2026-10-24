@@ -9,12 +9,13 @@
     "db:create": "wrangler d1 create tg-checkin-db",
     "db:migrate:local": "wrangler d1 migrations apply tg-checkin-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply tg-checkin-db --remote",
+    "db:export": "wrangler d1 export tg-checkin-db --output=./backups/tg-checkin-db.sql",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "verify": "npm run typecheck && npm test"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260927.1",
-    "pnpm": "^12.6.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2",
     "wrangler": "^4.141.0"

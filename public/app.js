@@ -85,6 +85,25 @@ function updateNav() {
 }
 
 window.addEventListener("hashchange", navigate);
+
+// 事件委托替代内联事件处理器（onclick/onchange），使页面可启用 CSP script-src 'self'
+document.addEventListener("click", (e) => {
+  if (!(e.target instanceof Element)) return;
+  const el = e.target.closest("[data-action]");
+  if (!el) return;
+  const id = Number(el.dataset.id);
+  switch (el.dataset.action) {
+    case "run": runTask(id, el); break;
+    case "edit": editTask(id); break;
+    case "delete": deleteTask(id); break;
+  }
+});
+document.addEventListener("change", (e) => {
+  if (!(e.target instanceof Element)) return;
+  const el = e.target.closest('input[data-action="toggle"]');
+  if (!el) return;
+  toggleTask(Number(el.dataset.id), el.checked);
+});
 window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("app-root").innerHTML = `
     <div class="container">
@@ -135,7 +154,12 @@ function renderLogin(el) {
 async function renderDashboard(el, seq) {
   el.innerHTML = `<div class="card">加载中...</div>`;
   try {
-    const data = await api("/api/overview");
+    // 传浏览器本地日界，让"今日"按本地时区口径统计（服务端默认按 UTC 日界）
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    const data = await api(`/api/overview?from=${dayStart.toISOString()}&to=${dayEnd.toISOString()}`);
     if (seq !== currentRenderSeq) return;
     el.innerHTML = `
       <div class="stats">
@@ -185,10 +209,10 @@ async function renderTasks(el, seq) {
               <td>${fmtTime(t.next_run_at)}</td>
               <td>${t.last_status ? `<span class="badge badge-${t.last_status}">${t.last_status}</span>` : "-"}</td>
               <td class="flex" style="flex-wrap:nowrap;">
-                <label class="switch"><input type="checkbox" ${t.enabled ? "checked" : ""} onchange="toggleTask(${t.id}, this.checked)"><span class="slider"></span></label>
-                <button class="btn btn-sm run-btn" onclick="runTask(${t.id}, this)">运行</button>
-                <button class="btn btn-sm" onclick="editTask(${t.id})">编辑</button>
-                <button class="btn btn-sm btn-danger" onclick="deleteTask(${t.id})">删除</button>
+                <label class="switch"><input type="checkbox" ${t.enabled ? "checked" : ""} data-action="toggle" data-id="${t.id}"><span class="slider"></span></label>
+                <button class="btn btn-sm run-btn" data-action="run" data-id="${t.id}">运行</button>
+                <button class="btn btn-sm" data-action="edit" data-id="${t.id}">编辑</button>
+                <button class="btn btn-sm btn-danger" data-action="delete" data-id="${t.id}">删除</button>
               </td>
             </tr>
           `).join("")}</tbody>
@@ -278,14 +302,14 @@ function showTaskModal(task) {
   };
 }
 
-window.toggleTask = async (id, enabled) => {
+async function toggleTask(id, enabled) {
   try {
     await api(`/api/tasks/${id}`, { method: "PATCH", body: JSON.stringify({ enabled: enabled ? 1 : 0 }) });
     toast(enabled ? "已启用" : "已停用");
   } catch (e) { toast("操作失败: " + e.message); navigate(); }
 };
 
-window.runTask = async (id, btn) => {
+async function runTask(id, btn) {
   btn.classList.add("loading");
   btn.textContent = "...";
   try {
@@ -296,14 +320,14 @@ window.runTask = async (id, btn) => {
   btn.textContent = "运行";
 };
 
-window.editTask = async (id) => {
+async function editTask(id) {
   try {
     const { task } = await api(`/api/tasks/${id}`);
     showTaskModal(task);
   } catch (e) { toast("加载失败: " + e.message); }
 };
 
-window.deleteTask = async (id) => {
+async function deleteTask(id) {
   if (!confirm("确认删除此任务？")) return;
   try {
     await api(`/api/tasks/${id}`, { method: "DELETE" });

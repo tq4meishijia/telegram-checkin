@@ -5,6 +5,8 @@ node_modules/
 .npm-cache/
 .pnpm-store/
 dist/
+backups/
+.workbuddy/
 
 .dbg*.png
 .login_*.log

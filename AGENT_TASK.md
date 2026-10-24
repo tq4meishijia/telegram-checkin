@@ -8,7 +8,7 @@
 
 ## 0. 人工前置准备（开工前你自己完成，约 20 分钟）
 
-- [ ] 本地装好：Node.js ≥ 22、pnpm、Git
+- [ ] 本地装好：Node.js ≥ 22、npm、Git
 - [ ] Cloudflare 账号（免费），`npx wrangler login` 能登录
 - [ ] Telegram：准备一个**小号**（强烈建议不要大号），开启二次验证（设置 → 隐私与安全 → 两步验证），记好密码
 - [ ] 访问 https://my.telegram.org/apps 用小号登录，创建应用，拿到 **api_id**（数字）和 **api_hash**（32位字符串）
@@ -71,20 +71,20 @@ ADMIN_PASSWORD=你的管理密码
 ```text
 执行 PLAN.md 的 M0 里程碑：初始化项目骨架。要求：
 
-1. pnpm init，安装并锁定：hono ^4、telegram ^2.26.x；devDependencies：wrangler ^4、typescript、@cloudflare/workers-types、vitest
+1. npm init，安装并锁定：hono ^4、telegram ^2.26.x；devDependencies：wrangler ^4、typescript、@cloudflare/workers-types、vitest
 2. wrangler.toml 按 PLAN.md 第 7 节结构写：name="tg-checkin"、main="src/index.ts"、compatibility_date 用今天的、compatibility_flags=["nodejs_compat"]、D1 绑定 DB（database_name="tg-checkin-db"，database_id 先留 "TODO" 占位并注释提醒）、[triggers] crons=["* * * * *"]、[assets] directory="./public" binding="ASSETS"
 3. tsconfig.json：面向 workers 的标准配置（types 引 @cloudflare/workers-types，moduleResolution "bundler"，strict）
 4. src/index.ts：Hono app，GET /api/health 返回 {ok:true}；export default 同时带 fetch 和 scheduled 两个入口（scheduled 先只 console.log）
 5. migrations/0001_init.sql：原样使用 PLAN.md 第 4 节的三张表 DDL
 6. public/index.html 先放一个占位页
 7. package.json scripts：dev / deploy / db:create / db:migrate:local / db:migrate:remote / typecheck
-8. 跑 npx tsc --noEmit 通过；跑 pnpm dev 后 curl http://localhost:8787/api/health 验证
+8. 跑 npx tsc --noEmit 通过；跑 npm run dev 后 curl http://localhost:8787/api/health 验证
 完成后告诉我接下来要我手动执行哪条命令创建 D1 并把 id 填回 wrangler.toml。
 ```
 </details>
 
 **验收清单（你来核对）**
-- [ ] `pnpm dev` 启动后 `curl http://localhost:8787/api/health` 返回 `{"ok":true}`
+- [ ] `npm run dev` 启动后 `curl http://localhost:8787/api/health` 返回 `{"ok":true}`
 - [ ] `npx wrangler d1 create tg-checkin-db` 成功，database_id 已填回 wrangler.toml
 - [ ] `npx wrangler d1 migrations apply tg-checkin-db --local` 成功
 - [ ] `npx wrangler d1 execute tg-checkin-db --local --command "SELECT name FROM sqlite_master WHERE type='table'"` 能看到 settings/tasks/run_logs
@@ -115,7 +115,7 @@ ADMIN_PASSWORD=你的管理密码
 - 注意 worker 打包体积，跑 npx wrangler deploy --dry-run 看压缩后大小并报告给我
 - npx tsc --noEmit 通过后给我验证步骤
 
-如果 connect 阶段报与 net/Socket/Buffer 相关的错，先确认 nodejs_compat 已生效；再不行按 PLAN.md 附录 B 备用路径改造：pnpm add telegram@browser，客户端选项加 useWSS:true，并在 src/index.ts 顶部给 globalThis.localStorage 打内存桩。两条路径都试过仍失败就停下来向我报告完整报错，不要继续往下做。
+如果 connect 阶段报与 net/Socket/Buffer 相关的错，先确认 nodejs_compat 已生效；再不行按 PLAN.md 附录 B 备用路径改造：npm i telegram@browser，客户端选项加 useWSS:true，并在 src/index.ts 顶部给 globalThis.localStorage 打内存桩。两条路径都试过仍失败就停下来向我报告完整报错，不要继续往下做。
 ```
 </details>
 

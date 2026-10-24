@@ -63,7 +63,7 @@
 | Telegram | **telegram**（GramJS）^2.26.x | **锁版本**。备用路径：`telegram@browser` dist-tag + `useWSS: true` |
 | 数据库 | D1 + wrangler migrations | 唯一存储 |
 | 前端 | 原生 HTML/JS/CSS 单页（hash 路由） | 零构建，避免小模型处理 bundler 问题 |
-| 包管理 | pnpm | 本地 Node ≥ 22 |
+| 包管理 | npm（仓库用 package-lock.json；早期文档写的 pnpm 未采用） | 本地 Node ≥ 22 |
 | 测试 | vitest（仅测时区换算等纯函数，可选）+ 手测清单 | 不追求覆盖率 |
 
 ### 免费额度 vs 预估用量

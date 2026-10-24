@@ -1,5 +1,7 @@
 name = "tg-checkin"
 main = "src/index.ts"
+# compatibility_date 暂保持 2025-04-01：升级会改变运行时行为，需在 wrangler dev 下
+# 完整回归（登录/cron/ GramJS 连接）后再上调，不作为常规维护动作。
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
 
@@ -9,8 +11,13 @@ crons = ["* * * * *"]
 [assets]
 directory = "./public"
 binding = "ASSETS"
-# /api/* 永远先打到 Worker，不要被静态资源/SPA 回退拦截
-run_worker_first = ["/api/*"]
+# 所有请求先打到 Worker：/api/* 由 Hono 处理，其余走 catch-all 回退到 ASSETS
+# （这样静态响应才能统一附加 CSP 等安全响应头）
+run_worker_first = ["/"]
+
+# Workers 日志（Tail Workers 之外的内置可观测），排障时在面板 Logs 查看
+[observability]
+enabled = true
 
 [[d1_databases]]
 binding = "DB"
