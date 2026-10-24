@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import type { Env } from "../bindings";
-import { getSetting } from "../db";
 
 export const overviewRoute = new Hono<{ Bindings: Env }>();
 
@@ -19,6 +18,7 @@ function isoToSqlite(iso: string): string | null {
 // 前端传浏览器本地日界，即可得到"本地今日"口径（默认 UTC 日界对东八区会早 8 小时翻天）。
 overviewRoute.get("/overview", async (c) => {
   const today = new Date().toISOString().slice(0, 10);
+  const nowIso = new Date().toISOString();
 
   const fromQ = c.req.query("from");
   const toQ = c.req.query("to");
@@ -49,22 +49,30 @@ overviewRoute.get("/overview", async (c) => {
     counts[row.status] = row.count;
   }
 
-  // 未来 24h 待执行任务（enabled + next_run_at 在未来 24h 内）
-  // 注意：next_run_at 存 ISO 'T' 格式，不能和 datetime('now') 的空格格式直接比字符串，
-  // 必须用 JS 生成同样 ISO 格式的上界再绑定。
+  // 未来 24h 待执行任务（enabled + next_run_at 落在 [now, now+24h]）。
+  // 下界用 JS 生成的 ISO 绑定：next_run_at 存 ISO 'T' 格式，不能和 datetime('now') 的
+  // 空格格式直接比字符串，必须用同样 ISO 格式的上/下界。
   const bound = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
   const upcoming = await c.env.DB.prepare(
-    `SELECT id, name, bot_username, command, next_run_at FROM tasks
-     WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
+    `SELECT id, name, bot_username, command, account_id, next_run_at FROM tasks
+     WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at >= ? AND next_run_at <= ?
      ORDER BY next_run_at ASC LIMIT 5`
-  ).bind(bound).all();
+  ).bind(nowIso, bound).all();
 
-  // session 状态
-  const sessionStr = await getSetting(c.env, "tg_session");
+  // 默认账户与账户总数（session 未配置时给前端一个明确提示）
+  const defaultAccount = await c.env.DB.prepare(
+    "SELECT id, name, status, tg_username, enabled FROM accounts WHERE is_default = 1"
+  ).first<{ id: number; name: string; status: string; tg_username: string | null; enabled: number }>();
+  const accountCountRow = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM accounts").first<{ n: number }>();
+  const taskCountRow = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM tasks").first<{ n: number }>();
 
   return c.json({
     today: counts,
     upcoming: upcoming.results,
-    sessionConfigured: !!sessionStr,
+    // 兼容字段：默认账户是否已配置可用 session
+    sessionConfigured: !!defaultAccount && defaultAccount.status === "ok",
+    defaultAccount: defaultAccount ?? null,
+    accountCount: accountCountRow?.n ?? 0,
+    taskCount: taskCountRow?.n ?? 0,
   });
 });

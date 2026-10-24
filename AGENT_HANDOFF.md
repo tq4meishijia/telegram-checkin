@@ -7,17 +7,16 @@
 
 ---
 
-## 0. 一分钟现状（2026-10-24 加固迭代后）
+## 0. 一分钟现状（2026-10-24 多账户迭代后）
 
-- **进度**：M0–M6 全部完成并上线；2026-10-24 完成一轮安全/稳定性加固（变更清单见 §17），M7 剩余项未开始。
+- **进度**：M0–M6 全部完成并上线；2026-10-24 先后完成「安全/稳定性加固」「全量代码通读」「多账户 + 密码修改 + 前端重构」三轮迭代（变更清单见 §17 / §19），M7 剩余项未开始。
 - **线上地址**：https://telegram-checkin.tq4meishijia.workers.dev （2026-10-24 重命名后的新地址；旧地址 tg-checkin.… 随 Worker 名变更已失效）
-- **线上状态（2026-10-24 已上线）**：✅ 清场重建完成——旧资源（Worker `cf-tg-checkin`、空库 `cf-tg-checkin-db`）已删；新库 `telegram-checkin-db`（7cee8c54-49ec-4cce-b2ae-30b214b79016，APAC）已建并完成 0001+0002 迁移；Worker **`telegram-checkin` 已部署**（版本 8bac35ac-4a81-48aa-92e6-f6e6fc73864a，cron `* * * * *` 已注册），3 个 secrets 已配置。**线上地址：https://telegram-checkin.tq4meishijia.workers.dev** 。
-  - **上线验证（全过）**：health 200；`/` 与 `/app.js` 带 CSP；正确密码登录签发 Cookie；带 Cookie 访问 overview/tasks 200（远程 D1 读写正常）；错密 5 次后第 6 次 429（限流表生效）。
-  - **唯一待办**：Telegram session 未配置（`sessionConfigured:false`）——用户需跑 `scripts/login.mjs` 拿新 StringSession 并在设置页粘贴（见 §15-8）。
-  - 账号下另有 Pages 项目 hexo/cross-gfw（与本项目无关，未动）。
+- **⚠️ 部署状态**：**本地代码已领先于线上**。§18.6 上线时的线上版本是「加固后、多账户前」的代码；本次多账户迭代（0003 迁移 + 新代码）**尚未部署**。部署前必须先 `npm run db:migrate:remote` 再 `npm run deploy`（见 §10 与红线 #8）。
+  - **0003 迁移对存量库的影响**：自动把 `settings.tg_session` 迁成 1 号「默认账户」（`is_default=1`、`status='ok'`），存量任务 `account_id` 回填为 1，并删除 settings 旧键。升级后原有任务继续归属该账户，行为不变。
+  - **初始口令**：未配置 `ADMIN_PASSWORD` secret 时，登录口令为内置默认值 `admin`；配置了 secret 则以 secret 为准。改过密码后以 `settings.admin_pw_hash` 为唯一准绳。
 - **线上现有数据**：1 个任务「每日签到」（目标 `me`、指令 `/checkin`、daily 08:00 Asia/Shanghai）；有成功/失败日志若干。
-- **代码健康度**：`npx tsc --noEmit` 无错误；vitest **72/72** 通过（5 个测试文件）；包体 gzip 约 333 KiB（远低于 3MB 上限）。
-- **QA 验证（2026-10-24）**：全量测试 **IS_PASS: YES**——单测 72/72、typecheck 0 错误、fake D1 集成 17/17、wrangler dev 冒烟 7/7、对抗探测 8/8；报告 `docs/qa-report-2026-10-24.md`。遗留 2 个低危项（N1 静态资源 CSP dev 行为偏差、N2 偶发 flaky），见 §15 待办。
+- **代码健康度**：`npx tsc --noEmit` 无错误；vitest **139/139** 通过（8 个测试文件）；包体 gzip 约 333 KiB（远低于 3MB 上限）。
+- **QA 验证（2026-10-24）**：加固轮全量测试 **IS_PASS: YES**（单测 72/72、冒烟 7/7、对抗探测 8/8），报告 `docs/qa-report-2026-10-24.md`；多账户轮验证见 §19.4。
 - **代码仓库**：https://github.com/tq4meishijia/telegram-checkin （**公开**仓库，MIT LICENSE；2026-10-24 由 `cf-tg-checkin` 重命名而来，旧地址自动重定向）。
 - **CI**：`.github/workflows/ci.yml`，push/PR 自动跑 `npm ci` + typecheck + test。
 - **wrangler 登录态（2026-10-24）**：已 OAuth 登录（`tq4meishijia@gmail.com`，账号 `3312884334@qq.com's Account`），**写权限 scopes 已补齐**（workers/workers_scripts/d1 等 write，当日二次授权确认）——远程迁移与部署已无权限障碍，只差用户下令执行。
@@ -86,56 +85,78 @@ telegram-checkin/
 ├── AGENT_HANDOFF.md         # ← 本文档
 ├── docs/                    # 过程文档（命名 kebab-case-YYYY-MM-DD.md，随提交进仓库）
 │   ├── architecture-analysis-2026-10-24.md   # 全量代码评审报告（加固依据）
-│   └── qa-report-2026-10-24.md               # 加固后全量测试报告（IS_PASS: YES）
+│   ├── qa-report-2026-10-24.md               # 加固后全量测试报告（IS_PASS: YES）
+│   └── project-overview-2026-10-24.md        # 接手通读报告（结构/流程/问题清单/维护手册）
 ├── _run.bat                 # Windows 下带代理环境执行任意命令的辅助脚本（路径相对自身目录）
 ├── migrations/
 │   ├── 0001_init.sql        # 三张表 DDL（settings/tasks/run_logs）
-│   └── 0002_hardening.sql   # login_attempts 表 + tasks.fail_streak 列
+│   ├── 0002_hardening.sql   # login_attempts 表 + tasks.fail_streak 列
+│   └── 0003_accounts.sql    # accounts 表 + tasks.account_id；存量 tg_session 迁入 1 号账户
 ├── scripts/
 │   └── login.mjs            # 本地登录脚本（非交互、SOCKS5 代理模式，见 §7）
 ├── src/
 │   ├── index.ts             # Hono app 装配：login/logout/health、中间件、路由、静态回退（带 CSP）、scheduled 入口
 │   ├── bindings.ts          # Env 类型（DB/ASSETS/3 个密钥字符串）
-│   ├── auth.ts              # HMAC Cookie 鉴权中间件（恒定时间比较 + epoch 吊销 + Origin 校验）
+│   ├── auth.ts              # HMAC Cookie 鉴权中间件（恒定时间比较 + epoch 吊销 + Origin 校验 + 独立签名密钥）
+│   ├── password.ts          # 管理密码：PBKDF2 哈希/校验/强度 + verifyAdminPassword 三级回退
 │   ├── ratelimit.ts         # 登录失败限流（D1 login_attempts 表，60s/5 次）
-│   ├── validation.ts        # 任务 body 输入校验（严格类型 + 排期组合）
-│   ├── util.ts              # safeJson / withTimeout
-│   ├── db.ts                # settings 表读写封装：getSetting/setSetting/deleteSetting
+│   ├── validation.ts        # 任务与账户输入校验（严格类型 + 排期组合）
+│   ├── util.ts              # safeJson / withTimeout / toHex / fromHex / timingSafeEqualHex
+│   ├── db.ts                # settings 表读写封装（含 setSettingIfAbsent）
 │   ├── tg/
-│   │   └── client.ts        # withSession()/withClient()：建 client→connect→fn→disconnect
+│   │   └── client.ts        # withSession()/withClient()/withAccountSession()：建 client→connect→fn→disconnect
 │   ├── cron/
 │   │   ├── schedule.ts      # computeNextRun() + localWallToUtc()（时区换算核心）
-│   │   └── runner.ts        # runDueTasks() + executeWithClaim() + executeOneTask()（租约抢占 + finally 重排 + 失败告警）
+│   │   └── runner.ts        # runDueTasks() + executeWithClaim() + executeOneTask()（租约抢占 + finally 重排 + 失败告警 + 账户状态跃迁）
 │   └── api/
+│       ├── accounts.ts      # 账户 CRUD + verify + switch（多账户核心；响应绝不返回 session）
+│       ├── password.ts      # POST /api/password 修改管理密码
 │       ├── overview.ts      # GET /api/overview（仪表盘聚合，支持 from/to 本地日界）
-│       ├── tasks.ts         # 任务 CRUD + /run（带抢占防并发）
-│       ├── logs.ts          # 日志查询（limit 强制收敛 1..100）
-│       └── session.ts       # session 状态/保存/清除（withSession + 20s 超时）
-├── public/                  # 原生 SPA（零构建）
+│       ├── tasks.ts         # 任务 CRUD + /run（带抢占防并发；account_id 归属）
+│       └── logs.ts          # 日志查询（limit 强制收敛 1..100）
+├── public/                  # 原生 SPA（零构建，Bento Grid 风格，响应式三档断点 + 暗色模式）
 │   ├── index.html           # 含 #app-root 容器，引 style.css 和 app.js
 │   ├── app.js               # hash 路由 SPA 全部逻辑（事件委托，无内联处理器）
-│   └── style.css            # 暗色卡片主题（约 54 行）
+│   └── style.css            # Bento 设计系统（CSS 变量 + 三档断点 + reduced-motion）
 └── tests/
     ├── schedule.test.ts     # schedule.ts 的 10 个单测
-    ├── runner.test.ts       # runner 14 个单测（T1 回归/租约自愈/告警/回复过滤/超时）
+    ├── runner.test.ts       # runner 21 个单测（T1 回归/租约自愈/告警/回复过滤/超时/账户隔离/状态跃迁）
     ├── auth.test.ts         # 鉴权与限流 13 个单测
     ├── validation.test.ts   # 输入校验 18 个单测
-    ├── api.test.ts          # 端到端 17 个单测（fake D1）
-    └── helpers/fake-db.ts   # 内存版 fake D1（按 SQL 特征路由）
+    ├── password.test.ts     # 密码哈希/强度/三级回退 12 个单测
+    ├── accounts.test.ts     # 账户 API 18 个单测（查重/级联/切换/接管默认位）
+    ├── api.test.ts          # 端到端 26 个单测（fake D1）
+    ├── frontend.test.ts     # 前端契约测试（CSP/Bento 规则/响应式/功能完整性）
+    └── helpers/fake-db.ts   # 内存版 fake D1（按 SQL 特征路由，支持 accounts 与列投影）
 ```
 
 ---
 
 ## 4. 数据模型
 
-三张表 + 一张限流表，DDL 以 `migrations/` 为准（0001 初始化，0002 加固）。
+五张表，DDL 以 `migrations/` 为准（0001 初始化，0002 加固，0003 多账户）。
 
 ### settings（键值配置）
 | 字段 | 说明 |
 |---|---|
-| key (PK) | `tg_session`（StringSession 字符串）、`auth_epoch`（登录态纪元，退出登录/改密码 +1 用于吊销 Cookie） |
+| key (PK) | `tg_session`（0003 起已废弃，数据迁到 accounts）、`auth_epoch`（登录态纪元）、`auth_signing_key`（Cookie 签名密钥，一次性随机生成，与口令解耦）、`admin_pw_hash`（PBKDF2 口令哈希） |
 | value | 配置值 |
 | updated_at | `datetime('now')`，**UTC、空格格式、无 Z**（见 §8 时间格式坑） |
+
+### accounts（Telegram 账户，0003 新增）
+| 字段 | 说明 |
+|---|---|
+| id | 自增主键 |
+| name | 账户显示名（1..100） |
+| session | StringSession（**唯一真源**；任何 API 不返回） |
+| api_id / api_hash | 可选的应用级凭据，为空时回退 Worker Secrets 的全局值 |
+| tg_user_id / tg_username | 验证时从 `getMe()` 取得；`tg_user_id` 上有唯一索引 → **重复登录同一账号会被 409 拦截** |
+| status | `ok` \| `invalid` \| `unknown`；runner 检测到会话类错误会自动标 `invalid`，成功后回 `ok` |
+| last_error / last_verified_at | 最近一次验证的错误与时间 |
+| enabled | 0/1；停用后其名下任务一并失选（runner JOIN 条件） |
+| is_default | 默认账户（新建任务的默认归属）；有唯一部分索引保证**全局唯一** |
+
+索引：`idx_accounts_user(tg_user_id) WHERE tg_user_id IS NOT NULL`、`idx_accounts_default(is_default) WHERE is_default = 1`。
 
 ### tasks（签到任务）
 | 字段 | 说明 |
@@ -144,6 +165,7 @@ telegram-checkin/
 | name | 任务显示名 |
 | bot_username | 目标机器人用户名（如 `@some_bot`，4-32 位字母数字下划线）；**`me` = 发给自己的"已保存消息"**（测试/告警用） |
 | command | 要发送的指令，如 `/checkin` |
+| **account_id** | **归属账户（0003 新增，默认 1）**。未建外键——SQLite 禁止 `ADD COLUMN` 带 `REFERENCES`（外键开启时要求默认 NULL），级联删除由应用层 batch 完成 |
 | schedule_type | `daily` \| `interval` |
 | schedule_value | daily：`"08:00"` 或 `"08:00,20:00"`（HH:MM，24 小时制）；interval：`"1"`..`"1440"` 分钟数字符串 |
 | timezone | IANA 时区，默认 `Asia/Shanghai`（写入时校验有效性） |
@@ -158,7 +180,7 @@ telegram-checkin/
 | fail_streak | 连续失败计数（0002 新增）；成功清零，用于每 3 次连续失败发一次告警 |
 | created_at / updated_at | 时间戳 |
 
-索引：`idx_tasks_due(enabled, next_run_at)`。
+索引：`idx_tasks_due(enabled, next_run_at)`、`idx_tasks_account(account_id, enabled, next_run_at)`。
 
 ### run_logs（执行日志）
 | 字段 | 说明 |
@@ -183,24 +205,33 @@ telegram-checkin/
 
 ## 5. API 接口清单（Hono，前缀 `/api`）
 
-除 `/api/health`、`/api/login`、`/api/logout` 外，**全部需要 HMAC Cookie 鉴权**（未带/过期/伪造/已吊销 → 401）。
+除 `/api/health`、`/api/login` 外，**全部需要 HMAC Cookie 鉴权**（未带/过期/伪造/已吊销 → 401）。
+**`/api/logout` 也需要鉴权**——它注册在鉴权中间件之后，匿名调用返回 401（修复前匿名请求可全局吊销会话，见 §19.2 P0-1）。
 
 | 方法 | 路径 | 请求体 / 参数 | 成功响应 | 错误 |
 |---|---|---|---|---|
 | GET | `/api/health` | — | `{ok:true}` | — |
 | POST | `/api/login` | `{password}` | `{ok:true}` + `Set-Cookie: auth=<expiry>.<epoch>.<hmac>`（7 天，HttpOnly, SameSite=Lax, https 时加 Secure） | 401 `{error:"invalid_password"}`；429 `{error:"too_many_attempts"}`（同 IP 60 秒错 5 次）；400 `invalid_json` |
-| POST | `/api/logout` | — | `{ok:true}` + 清 cookie（同时 bump auth_epoch，**全局吊销**所有已签发 Cookie） | — |
-| GET | `/api/overview` | query: `from`/`to`（ISO 带 Z，可选） | `{today:{success,failed,skipped}, upcoming:[...], sessionConfigured}`（upcoming = next_run_at 在「现在+24h」以内的已启用任务，最多 5 条；today 默认按 UTC 日界，传 from/to 则按传入区间，前端传本地日界） | 401；400 `invalid_from`/`invalid_to` |
-| GET | `/api/tasks` | — | `{tasks:[...]}` | 401 |
-| POST | `/api/tasks` | 见下"任务字段" | 201 `{task}` | 400 校验失败（含 `invalid_json`） |
+| POST | `/api/logout` | — | `{ok:true}` + 清 cookie（同时 bump auth_epoch，**全局吊销**所有已签发 Cookie） | **401**（未带 Cookie） |
+| GET | `/api/overview` | query: `from`/`to`（ISO 带 Z，可选） | `{today:{success,failed,skipped}, upcoming:[...], sessionConfigured, defaultAccount, accountCount, taskCount}`（upcoming = next_run_at 落在「现在 ~ 现在+24h」的已启用任务，最多 5 条；today 默认按 UTC 日界，传 from/to 则按传入区间，前端传本地日界） | 401；400 `invalid_from`/`invalid_to` |
+| GET | `/api/accounts` | — | `{accounts:[...]}`（**不含 session 字符串**） | 401 |
+| POST | `/api/accounts` | `{name, session, api_id?, api_hash?}` | 201 `{account}`（**先 connect+getMe 验证再入库**；同一 tg_user_id 重复添加 → 409 `duplicate_account`；首个账户或当前默认账户无 session 时自动接管默认位） | 400 无效 session / 409 重复 |
+| GET | `/api/accounts/:id` | — | `{account}`（不含 session） | 404 |
+| PATCH | `/api/accounts/:id` | `{name?, session?, api_id?, api_hash?, enabled?}` | `{account}`（改 session 会重新验证 + 查重；停用默认账户 → 400 `cannot_disable_default`） | 404 / 400 / 409 |
+| DELETE | `/api/accounts/:id` | — | `{ok:true}`（级联删任务与日志；删默认账户后剩余最小 id 接管；只剩一个账户 → 400 `last_account`） | 404 / 400 |
+| POST | `/api/accounts/:id/verify` | — | `{ok:true, account}`（刷新 status / tg_user_id / last_verified_at） | 400 无效 session / 404 |
+| POST | `/api/accounts/:id/switch` | — | `{ok:true, account}`（设为默认账户；停用中的账户 → 400 `account_disabled`） | 404 / 400 |
+| POST | `/api/password` | `{old_password, new_password, confirm_password}` | `{ok:true, relogin:true}`（存 PBKDF2 哈希 + bump epoch **全局吊销会话**） | 401 `invalid_old_password` / 400 `password_mismatch`\|`password_too_short`\|`password_too_weak`\|`password_unchanged` |
+| GET | `/api/tasks` | — | `{tasks:[...]}`（含 `account_id`） | 401 |
+| POST | `/api/tasks` | 见下"任务字段" | 201 `{task}` | 400 校验失败（含 `invalid_json`、`no_account_configured`、`account_not_found`、`account_disabled`） |
 | GET | `/api/tasks/:id` | — | `{task}` | 404 |
-| PATCH | `/api/tasks/:id` | 任意任务字段子集 | `{task}` | 404 / 400 |
-| DELETE | `/api/tasks/:id` | — | `{ok:true}` | — |
+| PATCH | `/api/tasks/:id` | 任意任务字段子集（含 `account_id`） | `{task}` | 404 / 400 |
+| DELETE | `/api/tasks/:id` | — | `{ok:true}` | **404**（不存在时） |
 | POST | `/api/tasks/:id/run` | — | `{ok:true, status, detail}`（**立即执行**；带租约抢占，cron 正在跑时返回 409 `already_running`；未到点不改变排期，已到点消耗该 slot） | 404 / 409 |
 | GET | `/api/logs` | query: `task_id`、`limit`(收敛到 1..100，默认50)、`before_id` | `{logs:[...]}` | 401；400 `invalid_task_id`/`invalid_before_id` |
-| GET | `/api/session` | — | 未配置：`{configured:false}`；已配置：`{configured:true, account:{name,username,phone}}`；失效：`{configured:true, account:null, error}` | 401 |
-| PUT | `/api/session` | `{session}` | `{ok:true, account:{...}}`（**先 connect+getMe 验证再入库**） | 400 无效 session |
-| DELETE | `/api/session` | — | `{ok:true}` | 401 |
+
+> **`/api/session` 已移除**（0003 起）。session 的唯一真源是 `accounts` 表，再由 `/api/accounts` 管理；
+> 保留两套会话 API 会造成双写源，是本项目已经踩过坑的一类问题（参见 §8 时间双轨制）。
 
 **安全机制（2026-10-24 加固）**：
 - 密码比对：SHA-256 双摘要 + 恒定时间比较（无计时侧信道）。
@@ -208,7 +239,8 @@ telegram-checkin/
 - CSRF：所有跨站 Origin 的 POST/PUT/PATCH/DELETE → 403 `origin_mismatch`（SameSite=Lax 之外的纵深）。
 - CSP：**HTML 文档与静态资源（/app.js、/style.css）响应**均带 `Content-Security-Policy`（script-src 'self'；前端已无内联脚本/事件处理器）。实现方式：`run_worker_first=["/", "/app.js", "/style.css"]` 让这三类路径先进 Worker，由 catch-all 回退 ASSETS 时统一附加（dev 实测生效；线上前缀匹配行为未验证）。
 
-**任务字段（POST/PATCH body）**：`name, bot_username, command, schedule_type, schedule_value, timezone, jitter_minutes, capture_reply, reply_wait_sec, enabled`。
+**任务字段（POST/PATCH body）**：`name, bot_username, command, schedule_type, schedule_value, timezone, jitter_minutes, capture_reply, reply_wait_sec, enabled, account_id`。
+（`account_id` 可省略：POST 省略时落到默认账户；PATCH 省略时不动。）
 
 **服务端校验规则**（`src/validation.ts`，POST/PATCH 共用，严格类型不做隐式转换）：
 - 必填：name / bot_username / command / schedule_type / schedule_value（PATCH 只校验出现的字段）。
@@ -281,7 +313,7 @@ telegram-checkin/
      - 代理：默认 SOCKS5 `127.0.0.1:7897`，可用 `TG_PROXY_HOST/TG_PROXY_PORT` 覆盖。
    - 成功后打印 `SESSION=...`。
    - 运行方式：`$env:TG_PHONE="+1..."; $env:TG_2FA="..."; node --env-file=.dev.vars scripts/login.mjs`。
-2. **保存到线上**：登录 Web 界面 → 设置页粘贴 → PUT /api/session（Worker 先用 `withSession` 验证再入库，20s 超时）；或用 curl 调同一接口。
+2. **保存到线上**：登录 Web 界面 → **账户页**「+ 添加账户」→ 粘贴 session → `POST /api/accounts`（Worker 先用该 session `connect` + `getMe` 验证，20s 超时；失败不入库）。或用 curl 调同一接口。
 3. **使用**：Worker 每次执行从 settings 读 session，`withClient()` → `withSession()` 建 client，**只 connect**。
 4. **失效/清除**：设置页「清除 Session」→ DELETE /api/session；之后任务会 failed（`tg_session not configured`）。
 
@@ -527,3 +559,102 @@ npx wrangler deploy
 - **线上验证（全过）**：health 200；CSP（`/` 与 `/app.js`）；正确密码登录→签发 Cookie；带 Cookie overview/tasks 200（远程 D1 读写）；错密 5 次后第 6 次 429 retry_after=54（login_attempts 生效）。
 - **本地**：`.dev.vars` 已按 tdesktop 凭据 + 线上同密码预填（gitignored），`scripts/login.mjs` 可直接跑。
 - **剩余**：仅 Telegram session（用户侧，见 §15-8 的命令）。
+
+---
+
+## 19. 2026-10-24 多账户 + 密码修改 + 前端重构迭代
+
+> 背景：用户要求三项改造——多 Telegram 账户管理、WebUI 密码修改、前端按 Bento Grid 样式参考重构。
+> **约束**：不换技术栈、不引新依赖（密码学全部用 WebCrypto）、不引入构建步骤、保持 CSP `script-src 'self'`。
+> 结果：`tsc` 0 错误，`vitest` **139/139**（8 个文件，原 72），本地迁移与 `wrangler dev` 端到端冒烟全过。
+
+### 19.1 多账户（`migrations/0003_accounts.sql` + `src/api/accounts.ts`）
+
+- **数据模型**：新增 `accounts` 表（session/api_id/api_hash/tg_user_id/status/enabled/is_default），`tasks` 加 `account_id`（默认 1）。
+  - 未给 `account_id` 建外键：SQLite 在 `foreign_keys=ON` 时**禁止 `ADD COLUMN` 带 `REFERENCES`**（要求默认 NULL），因此级联删除由应用层 batch 完成（`DELETE run_logs → DELETE tasks → DELETE accounts`）。
+  - `tg_user_id` 唯一索引 → **重复登录同一 Telegram 账号返回 409 `duplicate_account`**。
+  - `is_default` 唯一部分索引（`WHERE is_default = 1`）→ 默认账户全局唯一，切换/接管都在同一 batch 内先清后设。
+- **存量迁移**：`settings.tg_session` 自动迁成 1 号「默认账户」（`status='ok'`、`is_default=1`），存量任务 `account_id` 回填 1，删除 settings 旧键。**已实测两条路径**（干净库 / 带存量 session 与任务的库）。
+- **runner**：`SELECT t.*, a.session AS account_session ... FROM tasks t JOIN accounts a ON a.id = t.account_id`，一次查回凭据（无 N+1）；`a.enabled=1` 进入查询条件 → **账户停用后其任务一并失选**。执行、告警都用**本任务所属账户**的 session。
+- **登录失效处理**：runner 捕获到匹配 `/AUTH_KEY|SESSION_|REVOKED|UNREGISTERED|not configured|credentials|.../i` 的错误时，把账户 `status` 置为 `invalid` 并记 `last_error`；成功后回 `ok`。仅在状态**跃迁**时写库，避免每轮执行的写放大。
+- **重启恢复**：账户、任务、`next_run_at`、默认账户全部落 D1，无内存态，天然恢复。
+- **账户切换**：`POST /api/accounts/:id/switch`；删除默认账户后剩余最小 id 自动接管。
+- **并发/冲突**：任务级互斥仍由原有的租约式乐观锁承担（账户维度不引入额外锁）；多账户任务是**串行**执行的（单轮最多 10 条），这是为避免并发连接触发 Telegram 风控。
+
+### 19.2 密码修改（`src/password.ts` + `src/api/password.ts`）
+
+- **存储**：`pbkdf2$<iterations>$<saltHex>$<hashHex>`，PBKDF2-HMAC-SHA256、10 万次迭代、16 字节随机盐。**数据库不存明文**；迭代次数写在串里，将来调强度不会让旧哈希失效。
+- **口令解析优先级**（`verifyAdminPassword`）：
+  1. `settings.admin_pw_hash`（用户改过密码后以此为**唯一准绳**，不再回退）；
+  2. `ADMIN_PASSWORD` Worker Secret（既有部署的既有口令，保证升级不掉线）；
+  3. 内置默认 `admin`（全新部署、未配 secret 时的初始口令）。
+- **签名密钥解耦**：新增 `settings.auth_signing_key`（一次性随机 32 字节，`setSettingIfAbsent` 防并发首请求双写）。Cookie 的 HMAC 密钥不再依赖口令——否则改密后无法验证存量 Cookie。
+- **修改流程**：校验原密码（恒定时间）→ 两次新密码一致 → 强度（≥12 位且 ≥2 类字符）→ 不能与原密码相同 → 存哈希 → **bump `auth_epoch` 全局吊销所有会话**（有意为之：改密必须重新登录）。
+- **强度反馈**：设置页实时 4 段强度条 + 明确错误码（`password_too_short` / `password_too_weak` / `password_mismatch` / `invalid_old_password` / `password_unchanged`）。
+- **CPU 说明**：免费版 Workers 单次调用 CPU 预算约 10ms，PBKDF2 是原生 WebCrypto。若实测超限，只需下调 `ITERATIONS` 常量；已存储的哈希按自身记录的次数校验，不受影响。
+
+### 19.3 前端重构（`public/` 三件套，Bento Grid 风格）
+
+- **零构建不变**：样式参考里的 Tailwind class 全部转写为手写 CSS 令牌（zinc 中性色、16px 圆角、16/12/24px 三档间距、`shadow-sm → hover 扩散 + translateY(-2px)`、`active:scale-95`、图标 `scale(1.1)` 联动、200ms ease-out）。
+- **布局**：`.bento` 桌面 4 列 → 平板（≤900px）2 列 → 手机（≤640px）1 列；卡片有 `col-2` / `row-2` 跨格，**不存在等大网格**。仪表盘用 2×2 大卡承载"今日执行"，设置页用 2×2 大卡承载密码表单。
+- **暗色模式**：`prefers-color-scheme: dark` 全套令牌覆盖（不再是写死的暗色）。
+- **无障碍**：`prefers-reduced-motion` 降级、`focus-visible` 焦点环、正文对比度满足 WCAG AA（次要文字用 zinc-500/600，不用 zinc-400）、正文行宽 ≤68ch。
+- **CSP 兼容**：依旧零内联脚本/事件处理器（全局事件委托），`style-src 'unsafe-inline'` 仅用于少量 `style=""` 属性。
+- **新增页面**：`#/accounts`（账户卡：状态徽章/默认徽章/验证/设为默认/删除 + 添加模态框）、`#/settings` 的密码修改大卡 + **退出登录按钮**（原来前端没有出口）。
+- **全部原有功能保留**：任务卡（启停/运行/编辑/删除）、日志筛选 + 「加载更多」游标分页、仪表盘统计与即将执行、session 状态提示（改由默认账户状态驱动）。
+
+### 19.4 验证结果
+
+| 项 | 结果 |
+|---|---|
+| `npx tsc --noEmit` | ✅ 0 错误 |
+| `npx vitest run` | ✅ **139/139**（8 文件：schedule 10 / runner 21 / auth 13 / validation 18 / password 12 / accounts 18 / api 26 / frontend 21） |
+| 迁移·干净库 | ✅ 0001+0002+0003 顺序应用成功，`accounts` 表与 `tasks.account_id`（默认 1）就位 |
+| 迁移·存量库 | ✅ 存量 `tg_session` → 1 号默认账户（`status='ok'`），存量任务 `account_id=1`，settings 旧键已删 |
+| `wrangler dev` 端到端 | ✅ 默认口令 `admin` 登录 200；错密 401；**未鉴权 `POST /api/logout` → 401**（P0-1 修复）；带 Cookie 访问不受匿名 logout 影响；无账户时不阻断建任务（落到占位账户）；弱/不一致/错原密码/相同密码四类校验全部命中；改密后旧密码 401、新密码 200、旧 Cookie 401；库中仅见 `pbkdf2$100000$...` 与随机签名密钥，无明文；`Origin: null` → 403；`/` 与 `/app.js` 均带 CSP + `nosniff` |
+| `wrangler dev` cron | ✅ 手动触发后任务执行失败并记日志（`account_session_not_configured`），账户状态自动跃迁为 `invalid`，任务按 interval 重排到未来 |
+
+### 19.5 本轮顺手修复的历史遗留（均配回归测试）
+
+| 编号 | 问题 | 修复 |
+|---|---|---|
+| P0-1 | `/api/logout` 注册在鉴权中间件之前 → 匿名请求可 bump `auth_epoch` 全局吊销会话 | logout 移到中间件之后；`SKIP_AUTH` 移除该项 |
+| P1-1 | 前端时区下拉只有 5 项，编辑列表外时区会**静默改写**为 Asia/Shanghai | `tzOptions()` 动态把任务当前时区补进列表 |
+| P1-2 | `Origin: null`（沙箱 iframe）导致 `new URL()` 抛错 → 500 | try/catch，解析失败一律按 `origin_mismatch` 403 |
+| P2-2 | `DELETE /api/tasks/:id` 删不存在的任务也返回 200 | 检查 `meta.changes`，为 0 返回 404 |
+| P2-3 | `overview.upcoming` 只设上界，把已过期任务也算进"即将执行" | 增加 `next_run_at >= nowIso` 下界 |
+| P2-4 | PATCH 合并存量后**无条件**校验排期组合，历史脏排期让"启停切换"也失败 | 仅在确实要动排期/需重算 `next_run_at` 时才做组合校验 |
+| P2-8 | 静态响应缺 `X-Content-Type-Options` | catch-all 统一补 `nosniff` |
+| P2-1 | 前端没有退出登录入口，`/api/logout` 是死代码 | 设置页新增退出登录按钮 |
+
+### 19.6 仍未解决 / 下一步
+
+1. **未部署**：本地代码领先线上，需先 `npm run db:migrate:remote` 再 `npm run deploy`（等用户下令）。
+2. **未做浏览器自动化视觉回归**：响应式与 Bento 视觉目前只有静态契约测试（`tests/frontend.test.ts`）守护，改动 `public/` 后需人工在桌面/手机两种宽度过一遍。
+3. **PBKDF2 迭代次数的线上 CPU 实测**：本地 dev 已验证功能正确，但免费版 10ms CPU 预算下的真实耗时需上线后观察；超限则下调 `ITERATIONS`。
+4. `compatibility_date` 仍未上调（2025-04-01）；`telegram` 包 archived 的 `teleproto` 迁移评估仍未启动。
+5. 多账户下的 **D1 写放大**：账户状态跃迁写已做条件化，但任务数 × 账户数增长后仍需关注。
+
+### 19.7 浏览器实测（2026-10-24 下午，bsk + Edge）
+
+上一轮交付时「未做浏览器视觉回归」是遗留项；本轮用 browser-skill（`bsk` + Edge 扩展）对 `wrangler dev` 做了真实浏览器验证，**当场抓出两个单测全绿但浏览器白屏/误跳转的真 bug**：
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| B1 | 登录后仪表盘永远卡在"加载中..."，控制台 `ReferenceError: esc is not defined`（app.js:282），且 catch 块里也调 `esc` 导致二次抛错 | 重写 `public/app.js` 时 `esc()` 用在 30 处却漏写 `function esc` 定义。**单测全绿**——因为没有任何测试真正加载过 app.js | 补上 `esc` 定义；新增契约测试「所有被调用的自有工具函数都有定义」 |
+| B2 | 设置页输错**原密码**，页面直接跳登录页，看不到错误提示 | `api()` 把**任何** 401 都当会话过期并跳登录页；而 `/api/password` 的 401 是业务错误（`invalid_old_password`） | 改为只对鉴权类 401（`unauthorized`/`expired`/`invalid_signature`/`revoked`）跳登录页；新增契约测试固化 |
+
+**实测覆盖（全部通过）**：
+- 登录页渲染（含初始密码 `admin` 提示）→ `admin` 登录成功 → 仪表盘 8 张卡片完整渲染
+- 账户页：状态徽章/默认徽章/验证/删除/添加卡片齐全
+- 设置页：密码三框 + 强度提示 + 关于 + 退出登录
+- **密码四类校验全部在正确页面报错**：原密码错误 → `invalid_old_password`（留在设置页）；两次不一致 → `password_mismatch`；弱密码 → `password_too_short`；改密成功 → 跳登录页
+- **改密后旧密码 `admin` 登录失败、新密码登录成功并回到仪表盘**
+- 任务页：新建任务模态框（含新增的「执行账户」下拉）→ 保存 → 卡片正确展示排期/下次执行/账户归属 → 删除（confirm 对话框）正常
+- 日志页：筛选下拉 + 空态 + 「加载更多」禁用态
+- **响应式**：移动端 390×844 单列、桌面 1280 四列（`gridTemplateColumns` 实测 `250px×4`）、三个页面均无横向溢出（`scrollWidth === clientWidth`）
+- 暗色模式（`prefers-color-scheme: dark`）生效；全站控制台无新增错误
+
+**顺带修正的文案**：设置页原写「Session 字符串以哈希以外的方式安全保存在 D1」含混且不准（session 实为明文存 D1，属已知风险），改为「Session 字符串只保存在 D1，任何接口都不会返回它」。
+
+**测试数**：139 → **141**（新增 B1/B2 两条防回归契约测试）。

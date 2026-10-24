@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  withClient: vi.fn(),
+  withAccountSession: vi.fn(),
 }));
-vi.mock("../src/tg/client", () => ({ withClient: mocks.withClient, withSession: mocks.withClient }));
+vi.mock("../src/tg/client", () => ({
+  withAccountSession: mocks.withAccountSession,
+  withClient: mocks.withAccountSession,
+  getDefaultAccount: vi.fn(),
+}));
 
 import worker from "../src/index";
 import { createFakeDb } from "./helpers/fake-db";
@@ -12,8 +16,13 @@ import type { Env } from "../src/bindings";
 const ADMIN_PASSWORD = "secret-pw";
 const IP = "9.9.9.9";
 
-function makeEnv(tasks: Array<Record<string, unknown>> = []) {
-  const fake = createFakeDb({ tasks });
+const ACCOUNTS = [
+  { id: 1, name: "账户A", session: "sess-a", status: "ok", is_default: 1, enabled: 1, tg_user_id: 111, tg_username: "aaa" },
+  { id: 2, name: "账户B", session: "sess-b", status: "ok", enabled: 1, tg_user_id: 222, tg_username: "bbb" },
+];
+
+function makeEnv(tasks: Array<Record<string, unknown>> = [], accounts: Array<Record<string, unknown>> = ACCOUNTS) {
+  const fake = createFakeDb({ tasks, accounts });
   const env = {
     DB: fake.db,
     ASSETS: { fetch: async () => new Response("<html>fallback</html>", { status: 404 }) },
@@ -66,7 +75,7 @@ const validTask = {
 };
 
 beforeEach(() => {
-  mocks.withClient.mockReset();
+  mocks.withAccountSession.mockReset();
 });
 
 describe("POST /api/login", () => {
@@ -128,6 +137,22 @@ describe("POST /api/login", () => {
       expect(res.status).toBe(401);
     }
   });
+
+  it("改过密码后：新密码可登录，旧密码 401", async () => {
+    const { env } = makeEnv();
+    const cookie = await loginOk(env);
+    const changed = await req(
+      "/api/password",
+      jsonInit("POST", { old_password: ADMIN_PASSWORD, new_password: "NewPassw0rd!2026", confirm_password: "NewPassw0rd!2026" }, { Cookie: cookie }),
+      env
+    );
+    expect(changed.status).toBe(200);
+
+    const oldRes = await req("/api/login", jsonInit("POST", { password: ADMIN_PASSWORD }, { "CF-Connecting-IP": "2.2.2.2" }), env);
+    expect(oldRes.status).toBe(401);
+    const newRes = await req("/api/login", jsonInit("POST", { password: "NewPassw0rd!2026" }, { "CF-Connecting-IP": "3.3.3.3" }), env);
+    expect(newRes.status).toBe(200);
+  });
 });
 
 describe("鉴权与 CSRF", () => {
@@ -138,7 +163,7 @@ describe("鉴权与 CSRF", () => {
   });
 
   it("带 Cookie 访问 /api/tasks → 200", async () => {
-    const { env } = makeEnv([{ id: 1, name: "t1", enabled: 1 }]);
+    const { env } = makeEnv([{ id: 1, name: "t1", enabled: 1, account_id: 1 }]);
     const cookie = await loginOk(env);
     const res = await req("/api/tasks", { headers: { Cookie: cookie } }, env);
     expect(res.status).toBe(200);
@@ -157,7 +182,26 @@ describe("鉴权与 CSRF", () => {
     expect((await res.json()).error).toBe("origin_mismatch");
   });
 
-  it("退出登录后旧 Cookie 失效（401 revoked）", async () => {
+  it("Origin: null（沙箱 iframe）→ 403 而不是 500", async () => {
+    const { env } = makeEnv();
+    const cookie = await loginOk(env);
+    const res = await req(
+      "/api/tasks",
+      jsonInit("POST", validTask, { Cookie: cookie, Origin: "null" }),
+      env
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("origin_mismatch");
+  });
+
+  it("P0-1 回归：未鉴权 POST /api/logout 不再生效", async () => {
+    const { env, fake } = makeEnv();
+    const res = await req("/api/logout", { method: "POST" }, env);
+    expect(res.status).toBe(401);
+    expect(fake.state.settings.get("auth_epoch")).toBeUndefined();
+  });
+
+  it("带 Cookie 退出登录后旧 Cookie 失效（401 revoked）", async () => {
     const { env } = makeEnv();
     const cookie = await loginOk(env);
 
@@ -180,6 +224,37 @@ describe("任务创建校验", () => {
     expect(res.status).toBe(201);
     expect(fake.state.tasks).toHaveLength(1);
     expect(fake.state.tasks[0].next_run_at).toBeTruthy();
+    // 未指定 account_id 时落到默认账户
+    expect(fake.state.tasks[0].account_id).toBe(1);
+  });
+
+  it("指定 account_id → 归属该账户", async () => {
+    const { env, fake } = makeEnv();
+    const cookie = await loginOk(env);
+
+    const res = await req("/api/tasks", jsonInit("POST", { ...validTask, account_id: 2 }, { Cookie: cookie }), env);
+
+    expect(res.status).toBe(201);
+    expect(fake.state.tasks[0].account_id).toBe(2);
+  });
+
+  it("account_id 指向不存在/停用的账户 → 400", async () => {
+    const { env } = makeEnv();
+    const cookie = await loginOk(env);
+
+    const missing = await req("/api/tasks", jsonInit("POST", { ...validTask, account_id: 99 }, { Cookie: cookie }), env);
+    expect(missing.status).toBe(400);
+    expect((await missing.json()).error).toBe("account_not_found");
+
+    // 账户 2 处于停用状态
+    const { env: env2 } = makeEnv([], [
+      { id: 1, name: "A", is_default: 1, enabled: 1 },
+      { id: 2, name: "B", enabled: 0 },
+    ]);
+    const cookie2 = await loginOk(env2);
+    const disabled = await req("/api/tasks", jsonInit("POST", { ...validTask, account_id: 2 }, { Cookie: cookie2 }), env2);
+    expect(disabled.status).toBe(400);
+    expect((await disabled.json()).error).toBe("account_disabled");
   });
 
   it("jitter_minutes 传字符串 → 400 invalid_jitter_minutes", async () => {
@@ -215,6 +290,45 @@ describe("任务创建校验", () => {
       env
     );
     expect(res.status).toBe(400);
+  });
+
+  it("P2-4 回归：历史任务（合法排期）仍可切换启停", async () => {
+    const { env, fake } = makeEnv([{
+      id: 1, name: "legacy", bot_username: "me", command: "/c",
+      schedule_type: "daily", schedule_value: "08:00", timezone: "UTC",
+      jitter_minutes: 0, capture_reply: 0, reply_wait_sec: 10,
+      enabled: 0, account_id: 1, next_run_at: null,
+    }]);
+    const cookie = await loginOk(env);
+
+    const res = await req("/api/tasks/1", jsonInit("PATCH", { enabled: 1 }, { Cookie: cookie }), env);
+
+    expect(res.status).toBe(200);
+    expect(fake.state.tasks[0].enabled).toBe(1);
+    // 顺带修复了 NULL 的 next_run_at
+    expect(fake.state.tasks[0].next_run_at).toBeTruthy();
+  });
+
+  it("排期确实非法的任务：启用时报明确的排期错误，而不是静默通过", async () => {
+    const { env } = makeEnv([{
+      id: 1, name: "broken", bot_username: "me", command: "/c",
+      schedule_type: "daily", schedule_value: "720", timezone: "UTC",
+      jitter_minutes: 0, capture_reply: 0, reply_wait_sec: 10,
+      enabled: 0, account_id: 1, next_run_at: null,
+    }]);
+    const cookie = await loginOk(env);
+
+    const res = await req("/api/tasks/1", jsonInit("PATCH", { enabled: 1 }, { Cookie: cookie }), env);
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("invalid_time_format");
+  });
+
+  it("P2-2 回归：删除不存在的任务 → 404", async () => {
+    const { env } = makeEnv();
+    const cookie = await loginOk(env);
+    const res = await req("/api/tasks/999", { method: "DELETE", headers: { Cookie: cookie } }, env);
+    expect(res.status).toBe(404);
   });
 });
 
@@ -266,6 +380,23 @@ describe("GET /api/overview 统计区间", () => {
     expect((await outside.json()).today.success).toBe(0);
   });
 
+  it("P2-3 回归：upcoming 只含未来的任务，不含已过期任务", async () => {
+    const { env, fake } = makeEnv([
+      { id: 1, name: "已过期", bot_username: "me", command: "/c", enabled: 1, account_id: 1, next_run_at: new Date(Date.now() - 3600_000).toISOString() },
+      { id: 2, name: "未来", bot_username: "me", command: "/c", enabled: 1, account_id: 1, next_run_at: new Date(Date.now() + 3600_000).toISOString() },
+    ]);
+    const cookie = await loginOk(env);
+
+    const res = await req("/api/overview", { headers: { Cookie: cookie } }, env);
+    const j: any = await res.json();
+
+    expect(j.upcoming.map((u: any) => u.name)).toEqual(["未来"]);
+    expect(j.accountCount).toBe(2);
+    expect(j.taskCount).toBe(2);
+    expect(j.sessionConfigured).toBe(true);
+    expect(j.defaultAccount.name).toBe("账户A");
+  });
+
   it("非法 from → 400", async () => {
     const { env } = makeEnv();
     const cookie = await loginOk(env);
@@ -275,11 +406,12 @@ describe("GET /api/overview 统计区间", () => {
 });
 
 describe("静态资源回退与 CSP", () => {
-  it("非 API 路径走 ASSETS 且响应带 CSP 头", async () => {
+  it("非 API 路径走 ASSETS 且响应带 CSP 与 nosniff", async () => {
     const { env } = makeEnv();
     const res = await req("/", {}, env);
     const csp = res.headers.get("Content-Security-Policy") || "";
     expect(csp).toContain("script-src 'self'");
     expect(csp).toContain("default-src 'self'");
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
   });
 });

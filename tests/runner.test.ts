@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  withClient: vi.fn(),
+  withAccountSession: vi.fn(),
 }));
-vi.mock("../src/tg/client", () => ({ withClient: mocks.withClient }));
+vi.mock("../src/tg/client", () => ({
+  withAccountSession: mocks.withAccountSession,
+  withClient: mocks.withAccountSession,
+  getDefaultAccount: vi.fn(),
+}));
 
 import { runDueTasks, executeWithClaim, executeOneTask } from "../src/cron/runner";
 import { createFakeDb } from "./helpers/fake-db";
@@ -12,6 +16,15 @@ import type { Env } from "../src/bindings";
 const PAST = new Date(Date.now() - 60_000).toISOString(); // 1 分钟前（已到点）
 const LONG_PAST = new Date(Date.now() - 2 * 3600_000).toISOString(); // 2 小时前（迟到超 30 分钟）
 const FUTURE = new Date(Date.now() + 3600_000).toISOString(); // 1 小时后（未到点）
+
+const SESSION_A = "session-account-1";
+const SESSION_B = "session-account-2";
+
+/** 两个账户，用于验证任务按账户隔离取 session */
+const ACCOUNTS = [
+  { id: 1, name: "账户A", session: SESSION_A, status: "ok", is_default: 1, enabled: 1 },
+  { id: 2, name: "账户B", session: SESSION_B, status: "ok", enabled: 1 },
+];
 
 function baseTask(overrides: Record<string, unknown> = {}) {
   return {
@@ -28,18 +41,23 @@ function baseTask(overrides: Record<string, unknown> = {}) {
     enabled: 1,
     next_run_at: PAST,
     fail_streak: 0,
+    account_id: 1,
+    account_session: SESSION_A,
+    account_api_id: "",
+    account_api_hash: "",
+    account_status: "ok",
     ...overrides,
   };
 }
 
-const sent: Array<{ target: string; message: string }> = [];
+const sent: Array<{ session: string; target: string; message: string }> = [];
 
 function mockClientOk() {
   sent.length = 0;
-  mocks.withClient.mockImplementation(async (_env: unknown, fn: any) =>
+  mocks.withAccountSession.mockImplementation(async (_env: unknown, cred: any, fn: any) =>
     fn({
       sendMessage: async (target: string, opts: { message: string }) => {
-        sent.push({ target, message: opts.message });
+        sent.push({ session: cred.session, target, message: opts.message });
         return { id: 100 };
       },
       getMessages: async () => [],
@@ -47,8 +65,8 @@ function mockClientOk() {
   );
 }
 
-function makeEnv(tasks: Array<Record<string, unknown>>, settings: Record<string, string> = {}) {
-  const fake = createFakeDb({ tasks, settings });
+function makeEnv(tasks: Array<Record<string, unknown>>, accounts: Array<Record<string, unknown>> = ACCOUNTS) {
+  const fake = createFakeDb({ tasks, accounts });
   const env = {
     DB: fake.db,
     ASSETS: { fetch: async () => new Response("") },
@@ -60,7 +78,7 @@ function makeEnv(tasks: Array<Record<string, unknown>>, settings: Record<string,
 }
 
 beforeEach(() => {
-  mocks.withClient.mockReset();
+  mocks.withAccountSession.mockReset();
   sent.length = 0;
 });
 
@@ -71,12 +89,37 @@ describe("runner - cron 正常路径", () => {
 
     await runDueTasks(env);
 
-    expect(sent).toEqual([{ target: "me", message: "/checkin" }]);
+    expect(sent).toEqual([{ session: SESSION_A, target: "me", message: "/checkin" }]);
     const task = fake.state.tasks[0];
     expect(task.last_status).toBe("success");
     expect(task.next_run_at).not.toBe(PAST);
     expect(new Date(task.next_run_at).getTime()).toBeGreaterThan(Date.now());
     expect(fake.state.logs.at(-1)!.status).toBe("success");
+  });
+
+  it("多账户隔离：两个任务各用自己的 session 发送", async () => {
+    mockClientOk();
+    const { env } = makeEnv([
+      baseTask({ id: 1, name: "任务A", account_id: 1, account_session: SESSION_A }),
+      baseTask({ id: 2, name: "任务B", account_id: 2, account_session: SESSION_B, next_run_at: new Date(Date.now() - 30_000).toISOString() }),
+    ]);
+
+    await runDueTasks(env);
+
+    expect(sent).toHaveLength(2);
+    expect(sent.map((s) => s.session).sort()).toEqual([SESSION_A, SESSION_B].sort());
+  });
+
+  it("账户被停用时，其任务不被选中", async () => {
+    mockClientOk();
+    const { env } = makeEnv(
+      [baseTask({ id: 2, account_id: 2, account_session: SESSION_B })],
+      [{ id: 1, name: "A", session: SESSION_A, is_default: 1, enabled: 1 }, { id: 2, name: "B", session: SESSION_B, enabled: 0 }]
+    );
+
+    await runDueTasks(env);
+
+    expect(sent).toHaveLength(0);
   });
 
   it("迟到超过 30 分钟：不执行，记 skipped 日志并重排", async () => {
@@ -183,7 +226,7 @@ describe("runner - 失败告警与回复抓取", () => {
     const task = baseTask({ fail_streak: 2 });
     const { env, fake } = makeEnv([task]);
     let call = 0;
-    mocks.withClient.mockImplementation(async (_env: unknown, fn: any) => {
+    mocks.withAccountSession.mockImplementation(async (_env: unknown, _cred: any, fn: any) => {
       call += 1;
       if (call === 1) throw new Error("FLOOD_WAIT_X");
       return fn({ sendMessage: async () => ({ id: 1 }) });
@@ -196,10 +239,24 @@ describe("runner - 失败告警与回复抓取", () => {
     expect(fake.state.tasks[0].fail_streak).toBe(3);
   });
 
+  it("告警通过本任务所属账户发送，不用别的账户", async () => {
+    const task = baseTask({ fail_streak: 2, account_id: 2, account_session: SESSION_B });
+    const { env } = makeEnv([task]);
+    const used: string[] = [];
+    mocks.withAccountSession.mockImplementation(async (_env: unknown, cred: any, fn: any) => {
+      used.push(cred.session);
+      return fn({ sendMessage: async () => ({ id: 1 }) });
+    });
+
+    await executeWithClaim(env, task);
+
+    expect(used.every((s) => s === SESSION_B)).toBe(true);
+  });
+
   it("告警自身失败只记录，不递归告警", async () => {
     const task = baseTask({ fail_streak: 2 });
     const { env } = makeEnv([task]);
-    mocks.withClient.mockImplementation(async () => {
+    mocks.withAccountSession.mockImplementation(async () => {
       throw new Error("session_dead");
     });
 
@@ -224,7 +281,7 @@ describe("runner - 失败告警与回复抓取", () => {
     try {
       const task = baseTask({ capture_reply: 1, reply_wait_sec: 1 });
       const { env } = makeEnv([task]);
-      mocks.withClient.mockImplementation(async (_env: unknown, fn: any) =>
+      mocks.withAccountSession.mockImplementation(async (_env: unknown, _cred: any, fn: any) =>
         fn({
           sendMessage: async () => ({ id: 100 }),
           getMessages: async () => [
@@ -250,7 +307,7 @@ describe("runner - 失败告警与回复抓取", () => {
     try {
       const task = baseTask();
       const { env, fake } = makeEnv([task]);
-      mocks.withClient.mockImplementation(() => new Promise(() => {})); // 永远挂起
+      mocks.withAccountSession.mockImplementation(() => new Promise(() => {})); // 永远挂起
 
       const p = executeOneTask(env, task);
       await vi.advanceTimersByTimeAsync(26_000);
@@ -262,5 +319,56 @@ describe("runner - 失败告警与回复抓取", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("runner - 账户状态跃迁", () => {
+  it("会话失效类错误把账户标为 invalid", async () => {
+    const task = baseTask();
+    const { env, fake } = makeEnv([task]);
+    mocks.withAccountSession.mockImplementation(async () => {
+      throw new Error("AUTH_KEY_UNREGISTERED");
+    });
+
+    await executeWithClaim(env, task);
+
+    expect(fake.state.accounts[0].status).toBe("invalid");
+  });
+
+  it("非会话类错误不动账户状态", async () => {
+    const task = baseTask();
+    const { env, fake } = makeEnv([task]);
+    mocks.withAccountSession.mockImplementation(async () => {
+      throw new Error("network unreachable");
+    });
+
+    await executeWithClaim(env, task);
+
+    expect(fake.state.accounts[0].status).toBe("ok");
+  });
+
+  it("成功后账户状态恢复为 ok", async () => {
+    mockClientOk();
+    const task = baseTask({ account_status: "invalid" });
+    const { env, fake } = makeEnv([task]);
+
+    await executeWithClaim(env, task);
+
+    expect(fake.state.accounts[0].status).toBe("ok");
+  });
+
+  it("账户未配置 session：任务记 failed 且不崩溃", async () => {
+    mockClientOk();
+    const task = baseTask({ account_session: "" });
+    const { env, fake } = makeEnv([task]);
+    mocks.withAccountSession.mockImplementation(async () => {
+      throw new Error("account_session_not_configured");
+    });
+
+    const result = await executeWithClaim(env, task);
+
+    expect(result.status).toBe("failed");
+    expect(result.detail).toContain("account_session_not_configured");
+    expect(new Date(fake.state.tasks[0].next_run_at).getTime()).toBeGreaterThan(Date.now());
   });
 });

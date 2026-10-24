@@ -1,11 +1,39 @@
 import { Hono } from "hono";
 import type { Env } from "../bindings";
+import { safeJson } from "../util";
+import { validateSchedule, validateTaskBody } from "../validation";
 import { computeNextRun } from "../cron/schedule";
 import { executeWithClaim } from "../cron/runner";
-import { validateSchedule, validateTaskBody, type TaskInput } from "../validation";
-import { safeJson } from "../util";
 
 export const taskRoutes = new Hono<{ Bindings: Env }>();
+
+/**
+ * ISO(带 Z) → SQLite datetime('now') 的空格格式。
+ * run_logs.created_at 是空格格式，直接拿 ISO 'T' 串比较永远不匹配（'T' > ' '）。
+ */
+function isoToSqlite(iso: string): string | null {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().replace("T", " ").slice(0, 19);
+}
+
+/** 取默认账户 id（is_default=1；无则 id 最小者）；没有任何账户返回 null */
+async function resolveDefaultAccountId(env: Env): Promise<number | null> {
+  const row = await env.DB.prepare("SELECT id FROM accounts WHERE is_default = 1").first<{ id: number }>();
+  if (row) return row.id;
+  const fallback = await env.DB.prepare("SELECT id FROM accounts ORDER BY id ASC LIMIT 1").first<{ id: number }>();
+  return fallback?.id ?? null;
+}
+
+/** 校验账户存在且处于启用状态；不合法返回错误码 */
+async function checkAccountUsable(env: Env, accountId: unknown): Promise<string | null> {
+  const id = Number(accountId);
+  if (!Number.isInteger(id) || id <= 0) return "invalid_account_id";
+  const row = await env.DB.prepare("SELECT enabled FROM accounts WHERE id = ?").bind(id).first<{ enabled: number }>();
+  if (!row) return "account_not_found";
+  if (Number(row.enabled) !== 1) return "account_disabled";
+  return null;
+}
 
 // GET /api/tasks — 列表
 taskRoutes.get("/", async (c) => {
@@ -22,6 +50,16 @@ taskRoutes.post("/", async (c) => {
   if (!validated.ok) return c.json({ error: validated.error }, 400);
   const v = validated.value;
 
+  // 账户归属：未指定则落到默认账户
+  let accountId = v.account_id;
+  if (accountId === undefined) {
+    accountId = (await resolveDefaultAccountId(c.env)) ?? undefined;
+    if (accountId === undefined) return c.json({ error: "no_account_configured" }, 400);
+  } else {
+    const accountError = await checkAccountUsable(c.env, accountId);
+    if (accountError) return c.json({ error: accountError }, 400);
+  }
+
   // 排期可解才算合法（daily/interval 均能算出下一个未来时刻）
   const nextRun = computeNextRun(
     {
@@ -35,12 +73,12 @@ taskRoutes.post("/", async (c) => {
   if (!nextRun) return c.json({ error: "invalid_schedule" }, 400);
 
   const result = await c.env.DB.prepare(
-    `INSERT INTO tasks(name, bot_username, command, schedule_type, schedule_value, timezone, jitter_minutes, capture_reply, reply_wait_sec, enabled, next_run_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO tasks(name, bot_username, command, schedule_type, schedule_value, timezone, jitter_minutes, capture_reply, reply_wait_sec, enabled, account_id, next_run_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     v.name, v.bot_username, v.command, v.schedule_type, v.schedule_value,
     v.timezone, v.jitter_minutes, v.capture_reply, v.reply_wait_sec, v.enabled,
-    nextRun.toISOString()
+    accountId, nextRun.toISOString()
   ).run();
 
   const id = result.meta.last_row_id;
@@ -72,10 +110,8 @@ taskRoutes.patch("/:id", async (c) => {
   if (!validated.ok) return c.json({ error: validated.error }, 400);
   const patch = validated.value;
 
-  // 合并存量后校验排期组合（防止 daily + 分钟数这类非法搭配把任务写成静默停跑）
+  // 合并存量
   const merged = { ...existing, ...patch };
-  const scheduleError = validateSchedule(merged.schedule_type, merged.schedule_value);
-  if (scheduleError) return c.json({ error: scheduleError }, 400);
 
   // 白名单列名（防注入）；值均为校验过的类型
   const fields = [
@@ -91,12 +127,27 @@ taskRoutes.patch("/:id", async (c) => {
     }
   }
 
-  // 改了排期字段、或重新启用一个 next_run_at 为空的任务时，重算 next_run_at
+  // 账户归属变更：目标账户必须存在且启用
+  if (patch.account_id !== undefined) {
+    const accountError = await checkAccountUsable(c.env, patch.account_id);
+    if (accountError) return c.json({ error: accountError }, 400);
+    updates.push("account_id = ?");
+    values.push(patch.account_id);
+  }
+
   const scheduleChanged = ["schedule_type", "schedule_value", "timezone", "jitter_minutes"].some(
-    (f) => patch[f as keyof TaskInput] !== undefined
+    (f) => patch[f as keyof typeof patch] !== undefined
   );
   const enabling = patch.enabled === 1 && Number(existing.enabled) !== 1;
-  if (scheduleChanged || (enabling && !existing.next_run_at)) {
+
+  // 改了排期字段、或重新启用一个 next_run_at 为空的任务时，重算 next_run_at。
+  // 仅在"确实要动排期"时才做组合校验——否则历史脏排期（早于校验上线前写入的）
+  // 会让"启停切换"这种无关操作也一起失败（P2-4）。
+  const needRecompute = scheduleChanged || (enabling && !existing.next_run_at);
+  if (needRecompute) {
+    const scheduleError = validateSchedule(merged.schedule_type, merged.schedule_value);
+    if (scheduleError) return c.json({ error: scheduleError }, 400);
+
     const nextRun = computeNextRun(
       {
         scheduleType: merged.schedule_type as "daily" | "interval",
@@ -126,7 +177,8 @@ taskRoutes.patch("/:id", async (c) => {
 taskRoutes.delete("/:id", async (c) => {
   const id = Number(c.req.param("id"));
   if (!Number.isInteger(id) || id <= 0) return c.json({ error: "invalid_id" }, 400);
-  await c.env.DB.prepare("DELETE FROM tasks WHERE id = ?").bind(id).run();
+  const result = await c.env.DB.prepare("DELETE FROM tasks WHERE id = ?").bind(id).run();
+  if (result.meta.changes === 0) return c.json({ error: "not_found" }, 404);
   return c.json({ ok: true });
 });
 
@@ -135,7 +187,11 @@ taskRoutes.post("/:id/run", async (c) => {
   const id = Number(c.req.param("id"));
   if (!Number.isInteger(id) || id <= 0) return c.json({ error: "invalid_id" }, 400);
 
-  const task = await c.env.DB.prepare("SELECT * FROM tasks WHERE id = ?").bind(id).first<{
+  const task = await c.env.DB.prepare(
+    `SELECT t.*, a.session AS account_session, a.api_id AS account_api_id, a.api_hash AS account_api_hash
+     FROM tasks t JOIN accounts a ON a.id = t.account_id
+     WHERE t.id = ?`
+  ).bind(id).first<{
     id: number;
     name: string;
     bot_username: string;
@@ -148,6 +204,10 @@ taskRoutes.post("/:id/run", async (c) => {
     reply_wait_sec: number;
     next_run_at: string | null;
     fail_streak?: number;
+    account_id: number;
+    account_session: string;
+    account_api_id: string;
+    account_api_hash: string;
   }>();
   if (!task) return c.json({ error: "not_found" }, 404);
 

@@ -1,9 +1,11 @@
 import { Hono } from "hono";
 import type { Env } from "./bindings";
-import { authMiddleware, buildSetCookie, bumpAuthEpoch, secureEqual, signAuthCookie } from "./auth";
+import { authMiddleware, buildSetCookie, bumpAuthEpoch, signAuthCookie } from "./auth";
 import { checkLoginAllowed, clearLoginFailures, recordLoginFailure } from "./ratelimit";
 import { safeJson } from "./util";
-import { sessionRoutes } from "./api/session";
+import { verifyAdminPassword } from "./password";
+import { accountRoutes } from "./api/accounts";
+import { passwordRoutes } from "./api/password";
 import { taskRoutes } from "./api/tasks";
 import { logRoutes } from "./api/logs";
 import { overviewRoute } from "./api/overview";
@@ -35,7 +37,7 @@ app.post("/api/login", async (c) => {
   }
 
   const password = typeof body.password === "string" ? body.password : "";
-  if (!password || !(await secureEqual(password, c.env.ADMIN_PASSWORD))) {
+  if (!password || !(await verifyAdminPassword(c.env, password))) {
     await recordLoginFailure(c.env, ip);
     return c.json({ error: "invalid_password" }, 401);
   }
@@ -46,7 +48,12 @@ app.post("/api/login", async (c) => {
   return c.json({ ok: true });
 });
 
-// 退出登录：清 Cookie 并 bump epoch（吊销所有已签发的 Cookie）
+// 鉴权中间件保护 /api/* 路由。
+// 注意 Hono 的中间件只作用于**其后注册**的路由——logout 故意注册在下面，
+// 这样它必须携带有效 Cookie 才能调用（否则匿名请求就能全局吊销会话，见 P0-1）。
+app.use("/api/*", authMiddleware);
+
+// 退出登录：清 Cookie 并 bump epoch（吊销所有已签发的 Cookie）。需要鉴权。
 app.post("/api/logout", async (c) => {
   try {
     await bumpAuthEpoch(c.env);
@@ -57,11 +64,9 @@ app.post("/api/logout", async (c) => {
   return c.json({ ok: true });
 });
 
-// 鉴权中间件保护 /api/* 路由（login、logout、health 除外）
-app.use("/api/*", authMiddleware);
-
 // API 路由
-app.route("/api/session", sessionRoutes);
+app.route("/api/accounts", accountRoutes);
+app.route("/api/password", passwordRoutes);
 app.route("/api/tasks", taskRoutes);
 app.route("/api/logs", logRoutes);
 app.route("/api", overviewRoute);
@@ -71,6 +76,7 @@ app.get("*", async (c) => {
   const res = await c.env.ASSETS.fetch(c.req.raw);
   const headers = new Headers(res.headers);
   headers.set("Content-Security-Policy", CSP);
+  headers.set("X-Content-Type-Options", "nosniff");
   return new Response(res.body, { status: res.status, headers });
 });
 

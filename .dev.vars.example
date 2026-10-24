@@ -6,5 +6,10 @@
 #  登录设备显示为 Telegram Desktop）。无需自己申请，直接用下面的值。
 TG_API_ID=17349
 TG_API_HASH=344583e45741c457fe1862106095a5eb
-# 管理密码：本地开发用；线上以 wrangler secret 为准（二者独立，改任一不影响另一个）
-ADMIN_PASSWORD=至少16位随机管理密码
+# 管理密码（可选）：
+#   - 不填 / 删除本行 → 使用内置初始口令 "admin"（登录后请立即在设置页修改）
+#   - 填写 → 以这里的值为准
+#   - 无论哪种，一旦在 WebUI「设置」页改过密码，就以库里存的 PBKDF2 哈希为唯一准绳，
+#     本 secret 与默认口令都不再参与校验。
+# 线上值由 wrangler secret put ADMIN_PASSWORD 管理，二者独立。
+#ADMIN_PASSWORD=至少16位随机管理密码
