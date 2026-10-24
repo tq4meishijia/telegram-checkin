@@ -1,3 +1,10 @@
-TG_API_ID=你的api_id数字
-TG_API_HASH=你的api_hash
+# 本地开发密钥模板。复制为 .dev.vars 后按需修改：
+#   cp .dev.vars.example .dev.vars
+#
+# Telegram API 凭据：项目统一使用 Telegram Desktop 内置的公开 api_id/api_hash
+# （来源：github.com/telegramdesktop/tdesktop 源码 config.h，官方公开值，
+#  登录设备显示为 Telegram Desktop）。无需自己申请，直接用下面的值。
+TG_API_ID=17349
+TG_API_HASH=344583e45741c457fe1862106095a5eb
+# 管理密码：本地开发用；线上以 wrangler secret 为准（二者独立，改任一不影响另一个）
 ADMIN_PASSWORD=至少16位随机管理密码

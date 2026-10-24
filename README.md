@@ -55,7 +55,7 @@ npm run verify
 
 ## 拿 Telegram Session（M1 闸门，非交互模式）
 
-1. 在 https://my.telegram.org/apps 用小号申请 `api_id` / `api_hash`，填进 `.dev.vars`。
+1. Telegram 凭据项目统一使用 **Telegram Desktop 内置的公开 api_id/api_hash**（`api_id=17349`，`api_hash=344583e45…`，来自 tdesktop 官方源码，无需申请）——本地 `.dev.vars` 已预填，直接用。
 2. 非交互登录（手机号/二步密码走环境变量，验证码写入文件由脚本轮询）：
 
    ```bash
@@ -111,6 +111,7 @@ npm run db:export   # 导出到 backups/telegram-checkin-db.sql（gitignored，�
 
 | 日期 | 变更 | 提交 |
 |---|---|---|
+| 2026-10-24 | **上线成功**：清场重建（删旧 Worker/空库 → 新建 telegram-checkin-db → 迁移 → secrets → deploy），线上 https://telegram-checkin.tq4meishijia.workers.dev 全链路验证通过（登录/Cookie/D1 读写/限流 429/CSP）；Telegram 凭据统一为 tdesktop 公开值 | `874e766` 等 |
 | 2026-10-24 | QA 遗留闭环：JS/CSS 静态资源也带 CSP 头（run_worker_first 扩展）、capture_reply 测试改 fake timers 消除偶发 flaky（8/8 轮稳定）、删除 `.gitignore` 中误入的 `.ddev/` 行、wrangler 已登录（token 待补写权限） | 见 `git log` |
 | 2026-10-24 | 测试验证 + 文档同步：QA 全量测试 IS_PASS（单测 72/72、冒烟 7/7、对抗探测 8/8），QA 报告入库 `docs/`，CSP 描述按实测修正 | `8d91b31` |
 | 2026-10-24 | 安全/稳定性加固：runner 租约自愈（修复任务可能静默永久停跑）、登录恒定时间比对 + 同 IP 限流（429）、Cookie 条件 Secure + 退出登录全局吊销、任务输入严格校验、连续失败告警、单测 10 → 72、CI、MIT LICENSE、`db:export` 备份脚本 | `8475647` |

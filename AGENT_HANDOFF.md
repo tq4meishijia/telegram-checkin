@@ -11,7 +11,10 @@
 
 - **进度**：M0–M6 全部完成并上线；2026-10-24 完成一轮安全/稳定性加固（变更清单见 §17），M7 剩余项未开始。
 - **线上地址**：https://telegram-checkin.tq4meishijia.workers.dev （2026-10-24 重命名后的新地址；旧地址 tg-checkin.… 随 Worker 名变更已失效）
-- **线上状态**（2026-10-24 全新部署进行中）：旧资源已全部删除（Worker `cf-tg-checkin`、空库 `cf-tg-checkin-db`，用户确认后执行）；**新库 `telegram-checkin-db`（7cee8c54-49ec-4cce-b2ae-30b214b79016，APAC）已建立并完成 0001+0002 迁移**（表结构已核实：settings/tasks/run_logs/login_attempts 齐全、tasks.fail_streak 在位）；**Worker 尚未部署——缺 3 个 secrets（TG_API_ID/TG_API_HASH/ADMIN_PASSWORD，待用户提供）**。新线上地址将为 https://telegram-checkin.tq4meishijia.workers.dev 。账号下另有 Pages 项目 hexo/cross-gfw（与本项目无关，未动）。
+- **线上状态（2026-10-24 已上线）**：✅ 清场重建完成——旧资源（Worker `cf-tg-checkin`、空库 `cf-tg-checkin-db`）已删；新库 `telegram-checkin-db`（7cee8c54-49ec-4cce-b2ae-30b214b79016，APAC）已建并完成 0001+0002 迁移；Worker **`telegram-checkin` 已部署**（版本 8bac35ac-4a81-48aa-92e6-f6e6fc73864a，cron `* * * * *` 已注册），3 个 secrets 已配置。**线上地址：https://telegram-checkin.tq4meishijia.workers.dev** 。
+  - **上线验证（全过）**：health 200；`/` 与 `/app.js` 带 CSP；正确密码登录签发 Cookie；带 Cookie 访问 overview/tasks 200（远程 D1 读写正常）；错密 5 次后第 6 次 429（限流表生效）。
+  - **唯一待办**：Telegram session 未配置（`sessionConfigured:false`）——用户需跑 `scripts/login.mjs` 拿新 StringSession 并在设置页粘贴（见 §15-8）。
+  - 账号下另有 Pages 项目 hexo/cross-gfw（与本项目无关，未动）。
 - **线上现有数据**：1 个任务「每日签到」（目标 `me`、指令 `/checkin`、daily 08:00 Asia/Shanghai）；有成功/失败日志若干。
 - **代码健康度**：`npx tsc --noEmit` 无错误；vitest **72/72** 通过（5 个测试文件）；包体 gzip 约 333 KiB（远低于 3MB 上限）。
 - **QA 验证（2026-10-24）**：全量测试 **IS_PASS: YES**——单测 72/72、typecheck 0 错误、fake D1 集成 17/17、wrangler dev 冒烟 7/7、对抗探测 8/8；报告 `docs/qa-report-2026-10-24.md`。遗留 2 个低危项（N1 静态资源 CSP dev 行为偏差、N2 偶发 flaky），见 §15 待办。
@@ -353,6 +356,8 @@ npx wrangler deploy
 
 > 本项目使用的 Telegram 凭据为 **Telegram Desktop 官方开源客户端内置的公开 api_id/api_hash**（用户无法在 my.telegram.org 申请到 app 时的替代路线，登录设备显示为 Telegram Desktop）。需要真实值时从用户 `.dev.vars` 读取，**不要写进文档或提交**。
 
+> **2026-10-24 起为项目统一标准（用户明确）**：Telegram 凭据固定使用 tdesktop 公开值——`api_id=17349`、`api_hash=344583e45741c457fe1862106095a5eb`（来源：`github.com/telegramdesktop/tdesktop` 源码 `config.h`，v4.15.0 tag 实测在位；dev 分支已改为需自建，但该公开值长期有效且为项目既有用法）。`.dev.vars.example` 已预填这两个值，无需申请。admin 密码不走文档：线上值由 `wrangler secret put` 管理，当前为 2026-10-24 生成的强随机值（已在对话中交给用户，丢失则重新 put 一个）。
+
 ---
 
 ## 12. 标准改动工作流（每次改代码都照做）
@@ -416,7 +421,14 @@ npx wrangler deploy
 7. **迁移到 teleproto**：仅当 `telegram` 出现安全问题或必须缺失特性时启动（见 §14 注）。
 
 **当前最高优先（用户侧操作，做前确认）**：
-8. **上线（进行中）**：✅ 旧资源已删（Worker `cf-tg-checkin` + 空库 `cf-tg-checkin-db`，2026-10-24 用户确认后执行）；✅ 新库 `telegram-checkin-db`（7cee8c54…）已建并迁移（0001+0002 已验证）。⏳ 剩余：**用户提供 3 个 secrets**（TG_API_ID/TG_API_HASH/ADMIN_PASSWORD，本地无 .dev.vars）→ `wrangler secret put` ×3 → `npm run deploy`（新地址 telegram-checkin.tq4meishijia.workers.dev）→ **用户重新跑 scripts/login.mjs 拿新 StringSession** 并在设置页粘贴（旧 session 随旧库删除已丢失）。
+8. **上线（✅ 已完成，仅剩 session）**：旧资源已删、新库已建已迁移、secrets 已配、Worker 已部署并线上验证通过（见 §0）。⏳ **唯一剩余：用户跑 `scripts/login.mjs` 拿新 StringSession 并在设置页粘贴**（本地 `.dev.vars` 已预填 tdesktop 公开凭据，直接可用）：
+   ```powershell
+   $env:TG_PHONE="+8613xxxxxxxxx"      # 你的手机号
+   $env:TG_2FA="你的二步验证密码"
+   node --env-file=.dev.vars scripts/login.mjs
+   # 收到短信验证码后，把验证码写进 .tg_code.txt，脚本自动继续，终端打印 SESSION=...
+   ```
+   > 本机直连 Telegram DC 被墙，脚本默认走 SOCKS5 `127.0.0.1:7897`（Clash）；如在代理环境运行用 `TG_PROXY_HOST/TG_PROXY_PORT` 覆盖。也可以把手机号+二步密码交给主理方代跑（验证码仍需用户写入文件）。
 9. ~~**N2 flaky 处置**~~：✅ 2026-10-24 已根因修复——capture_reply 用例改 fake timers（消除唯一真实计时依赖），未加 `--retry`（保持 CI 严格）；连续 8 轮全量测试 8/8 全绿（修复前复现率约 12%）。
 10. ~~**N1 收尾**~~：✅ 2026-10-24 已闭环——`run_worker_first` 扩为 `["/", "/app.js", "/style.css"]`，dev 实测三类路径均带 CSP 头（`/` HTML、`/app.js` JS、`/style.css` CSS，content-type 均正常）；其余端点回归无破（health/scheduled/404/401 正常）。
 11. ~~**`.gitignore` 的 `.ddev/` 疑似笔误**~~：✅ 2026-10-24 已删除。研究结论：`.ddev/` 是 DDEV（Docker 版 PHP 本地开发工具的配置目录），本仓库 Node/Cloudflare 技术栈零依赖，属误入行。
@@ -507,3 +519,11 @@ npx wrangler deploy
 - **迁移**：`db:migrate:remote` 两个迁移均 ✅；远程核实表清单 `_cf_KV,d1_migrations,sqlite_sequence,settings,tasks,run_logs,login_attempts`，`tasks.fail_streak` 存在。
 - **未完成**：secrets 未设置、Worker 未部署（缺 TG_API_ID/TG_API_HASH/ADMIN_PASSWORD）；新 session 未获取。见 §15-8。
 - **凭据备注**：Cloudflare API 调用用 wrangler 配置里的 OAuth token（`%APPDATA%\xdg.config\.wrangler\config\default.toml` 的 `oauth_token`），**不要**用 git 的 GitHub token（会 10000 认证错误）。
+
+### 18.6 上线完成（2026-10-24 下午）
+
+- **secrets**：TG_API_ID=17349、TG_API_HASH=344583e45741c457fe1862106095a5eb（tdesktop 公开值，用户确认为项目统一标准，已从官方源码核实）；ADMIN_PASSWORD=生成的强随机值（对话中交付用户，未入库）。
+- **部署**：`npm run deploy` 成功——`telegram-checkin`（版本 8bac35ac…），cron 已注册，包体 gzip 336.40 KiB。
+- **线上验证（全过）**：health 200；CSP（`/` 与 `/app.js`）；正确密码登录→签发 Cookie；带 Cookie overview/tasks 200（远程 D1 读写）；错密 5 次后第 6 次 429 retry_after=54（login_attempts 生效）。
+- **本地**：`.dev.vars` 已按 tdesktop 凭据 + 线上同密码预填（gitignored），`scripts/login.mjs` 可直接跑。
+- **剩余**：仅 Telegram session（用户侧，见 §15-8 的命令）。
